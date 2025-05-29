@@ -9,8 +9,6 @@ const FolderManager = ({ onFoldersChange }) => {
   const [message, setMessage] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingFolder, setEditingFolder] = useState(null);
-  const [preprocessingStatus, setPreprocessingStatus] = useState({});
-  const [showPreprocessingDetails, setShowPreprocessingDetails] = useState({});
   const [formData, setFormData] = useState({
     folder_path: '',
     folder_name: '',
@@ -425,14 +423,14 @@ ${data.documents.slice(0, 10).map(doc =>
                   <div className="folder-meta">
                     <div><strong>ID:</strong> {folder.id}</div>
                     <div><strong>Added:</strong> {formatDate(folder.created_at)}</div>
-                    <div><strong>Processing Status:</strong>
-                      <span className={`processing-status ${folder.status || 'not-processed'}`}>
-                        {getProcessingStatusDisplay(folder.status)}
-                      </span>
-                    </div>
-                    <div><strong>Active Status:</strong>
+                    <div><strong>Status:</strong>
                       <span className={`status ${folder.active ? 'active' : 'inactive'}`}>
                         {folder.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    <div><strong>Processing:</strong>
+                      <span className={`processing-status ${folder.status || 'not-processed'}`}>
+                        {getProcessingStatusDisplay(folder.status)}
                       </span>
                     </div>
                   </div>

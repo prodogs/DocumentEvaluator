@@ -1371,6 +1371,14 @@ def activate_folder(folder_id):
             session.close()
             return jsonify({'error': f'Folder not found: {folder_id}'}), 404
 
+        # Check if folder has been preprocessed
+        folder_status = getattr(folder, 'status', 'NOT_PROCESSED')
+        if folder_status != 'READY':
+            session.close()
+            return jsonify({
+                'error': f'Folder must be preprocessed before activation. Current status: {folder_status}. Please preprocess the folder first.'
+            }), 400
+
         folder.active = 1
         session.commit()
 
