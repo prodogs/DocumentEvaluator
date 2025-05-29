@@ -123,6 +123,10 @@ def main():
         from server.api.folder_routes import folder_routes
         app.register_blueprint(folder_routes)
 
+        # Register folder preprocessing routes
+        from server.api.folder_preprocessing_routes import folder_preprocessing_bp
+        app.register_blueprint(folder_preprocessing_bp)
+
         # Initialize service integration components
         from server.services.health_monitor import health_monitor
         from server.api.status_polling import polling_service

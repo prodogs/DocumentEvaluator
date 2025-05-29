@@ -7,6 +7,7 @@ Updated to use PostgreSQL server at tablemini.local
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+import psycopg2
 
 # PostgreSQL connection URL
 DATABASE_URL = "postgresql://postgres:prodogs03@tablemini.local:5432/doc_eval"
@@ -38,3 +39,13 @@ def create_tables():
 def get_engine():
     """Get the database engine"""
     return engine
+
+def get_db_connection():
+    """Get a raw psycopg2 database connection for direct SQL operations"""
+    return psycopg2.connect(
+        host="tablemini.local",
+        database="doc_eval",
+        user="postgres",
+        password="prodogs03",
+        port=5432
+    )
