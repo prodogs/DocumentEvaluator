@@ -1342,6 +1342,7 @@ def list_folders():
                 'folder_path': folder.folder_path,
                 'folder_name': folder.folder_name,
                 'active': bool(folder.active),
+                'status': getattr(folder, 'status', 'NOT_PROCESSED'),  # Include preprocessing status
                 'created_at': folder.created_at.isoformat() if folder.created_at else None
             })
 

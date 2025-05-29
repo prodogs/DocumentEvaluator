@@ -29,7 +29,7 @@ def add_folder():
         folder = Folder(
             folder_path=folder_path,
             folder_name=folder_name,
-            active=1 if data.get('active', True) else 0
+            active=1 if data.get('active', False) else 0  # Default to False - must preprocess first
         )
         session.add(folder)
         session.commit()

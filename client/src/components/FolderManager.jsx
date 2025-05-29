@@ -9,10 +9,12 @@ const FolderManager = ({ onFoldersChange }) => {
   const [message, setMessage] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingFolder, setEditingFolder] = useState(null);
+  const [preprocessingStatus, setPreprocessingStatus] = useState({});
+  const [showPreprocessingDetails, setShowPreprocessingDetails] = useState({});
   const [formData, setFormData] = useState({
     folder_path: '',
     folder_name: '',
-    active: true
+    active: false  // Changed default to false - folders should not be active until preprocessed
   });
 
   useEffect(() => {
@@ -89,6 +91,12 @@ const FolderManager = ({ onFoldersChange }) => {
   };
 
   const handleToggleActive = async (folder) => {
+    // Only allow activation if folder is preprocessed (status = READY)
+    if (!folder.active && folder.status !== 'READY') {
+      setMessage('Folder must be preprocessed before it can be activated. Click "Preprocess" first.');
+      return;
+    }
+
     try {
       setLoading(true);
       const endpoint = folder.active ? 'deactivate' : 'activate';
@@ -98,6 +106,58 @@ const FolderManager = ({ onFoldersChange }) => {
     } catch (error) {
       console.error('Error toggling folder:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePreprocessFolder = async (folder) => {
+    if (!window.confirm(`Start preprocessing "${folder.folder_name || folder.folder_path}"?\n\nThis will scan all files in the folder and prepare them for batch processing.`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setMessage('Starting folder preprocessing...');
+
+      const response = await axios.post(`${API_BASE_URL}/api/folders/preprocess`, {
+        folder_path: folder.folder_path,
+        folder_name: folder.folder_name || folder.folder_path.split('/').pop()
+      });
+
+      const results = response.data.results;
+      setMessage(`Preprocessing completed! Found ${results.total_files} files (${results.valid_files} valid, ${results.invalid_files} invalid). Total size: ${(results.total_size / 1024).toFixed(1)} KB`);
+
+      // Refresh folders to show updated status
+      loadFolders();
+    } catch (error) {
+      console.error('Error preprocessing folder:', error);
+      setMessage(`Preprocessing failed: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleViewDocuments = async (folder) => {
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/api/folders/${folder.id}/documents`);
+      const data = response.data;
+
+      const summary = `Documents in "${folder.folder_name || folder.folder_path}":
+
+Total: ${data.total_documents}
+Valid: ${data.valid_documents}
+Invalid: ${data.invalid_documents}
+
+${data.documents.slice(0, 10).map(doc =>
+        `${doc.valid ? '✅' : '❌'} ${doc.filename} (${(doc.file_size / 1024).toFixed(1)} KB)`
+      ).join('\n')}${data.documents.length > 10 ? `\n... and ${data.documents.length - 10} more files` : ''}`;
+
+      alert(summary);
+    } catch (error) {
+      console.error('Error loading documents:', error);
+      setMessage(`Error loading documents: ${error.response?.data?.error || error.message}`);
     } finally {
       setLoading(false);
     }
@@ -169,6 +229,20 @@ const FolderManager = ({ onFoldersChange }) => {
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleDateString();
+  };
+
+  const getProcessingStatusDisplay = (status) => {
+    switch (status) {
+      case 'READY':
+        return '✅ Ready';
+      case 'PREPROCESSING':
+        return '⏳ Processing...';
+      case 'ERROR':
+        return '❌ Error';
+      case 'NOT_PROCESSED':
+      default:
+        return '⚪ Not Processed';
+    }
   };
 
   return (
@@ -288,15 +362,39 @@ const FolderManager = ({ onFoldersChange }) => {
         ) : (
           <div className="folders-grid">
             {folders.map(folder => (
-              <div key={folder.id} className={`folder-card ${folder.active ? 'active' : 'inactive'}`}>
+              <div key={folder.id} className={`folder-card ${folder.active ? 'active' : 'inactive'} ${folder.status || 'not-processed'}`}>
                 <div className="folder-header">
                   <h5>{folder.folder_name || folder.folder_path.split('/').pop()}</h5>
                   <div className="folder-actions">
+                    {/* Preprocess button - only show if not READY */}
+                    {folder.status !== 'READY' && (
+                      <button
+                        onClick={() => handlePreprocessFolder(folder)}
+                        className="btn btn-sm btn-info"
+                        disabled={loading || folder.status === 'PREPROCESSING'}
+                        title="Preprocess folder to scan and validate files"
+                      >
+                        {folder.status === 'PREPROCESSING' ? '⏳' : '🔄'}
+                      </button>
+                    )}
+
+                    {/* View documents button - only show if READY */}
+                    {folder.status === 'READY' && (
+                      <button
+                        onClick={() => handleViewDocuments(folder)}
+                        className="btn btn-sm btn-info"
+                        disabled={loading}
+                        title="View processed documents"
+                      >
+                        📄
+                      </button>
+                    )}
+
                     <button
                       onClick={() => handleToggleActive(folder)}
                       className={`btn btn-sm ${folder.active ? 'btn-warning' : 'btn-success'}`}
-                      disabled={loading}
-                      title={folder.active ? 'Deactivate' : 'Activate'}
+                      disabled={loading || folder.status !== 'READY'}
+                      title={folder.status !== 'READY' ? 'Preprocess folder first' : (folder.active ? 'Deactivate' : 'Activate')}
                     >
                       {folder.active ? '🔴' : '🟢'}
                     </button>
@@ -327,7 +425,12 @@ const FolderManager = ({ onFoldersChange }) => {
                   <div className="folder-meta">
                     <div><strong>ID:</strong> {folder.id}</div>
                     <div><strong>Added:</strong> {formatDate(folder.created_at)}</div>
-                    <div><strong>Status:</strong>
+                    <div><strong>Processing Status:</strong>
+                      <span className={`processing-status ${folder.status || 'not-processed'}`}>
+                        {getProcessingStatusDisplay(folder.status)}
+                      </span>
+                    </div>
+                    <div><strong>Active Status:</strong>
                       <span className={`status ${folder.active ? 'active' : 'inactive'}`}>
                         {folder.active ? 'Active' : 'Inactive'}
                       </span>
