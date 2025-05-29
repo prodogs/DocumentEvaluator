@@ -1,0 +1,6 @@
+Flask
+Flask-CORS
+SQLAlchemy
+python-dotenv
+requests
+python-magic # For file type detection
