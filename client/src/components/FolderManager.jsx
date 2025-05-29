@@ -110,27 +110,29 @@ const FolderManager = ({ onFoldersChange }) => {
   };
 
   const handlePreprocessFolder = async (folder) => {
-    if (!window.confirm(`Start preprocessing "${folder.folder_name || folder.folder_path}"?\n\nThis will scan all files in the folder and prepare them for batch processing.`)) {
+    const isReprocessing = folder.status === 'READY';
+    const action = isReprocessing ? 'reprocess' : 'preprocess';
+
+    if (!window.confirm(`Start ${action}ing "${folder.folder_name || folder.folder_path}"?\n\nThis will scan all files in the folder and prepare them for batch processing.`)) {
       return;
     }
 
     try {
       setLoading(true);
-      setMessage('Starting folder preprocessing...');
+      // Clear any existing messages
+      setMessage('');
 
-      const response = await axios.post(`${API_BASE_URL}/api/folders/preprocess`, {
+      await axios.post(`${API_BASE_URL}/api/folders/preprocess`, {
         folder_path: folder.folder_path,
         folder_name: folder.folder_name || folder.folder_path.split('/').pop()
       });
 
-      const results = response.data.results;
-      setMessage(`Preprocessing completed! Found ${results.total_files} files (${results.valid_files} valid, ${results.invalid_files} invalid). Total size: ${(results.total_size / 1024).toFixed(1)} KB`);
-
+      // Don't show global message for preprocessing - status will be shown in folder card
       // Refresh folders to show updated status
       loadFolders();
     } catch (error) {
       console.error('Error preprocessing folder:', error);
-      setMessage(`Preprocessing failed: ${error.response?.data?.error || error.message}`);
+      setMessage(`${isReprocessing ? 'Reprocessing' : 'Preprocessing'} failed: ${error.response?.data?.error || error.message}`);
     } finally {
       setLoading(false);
     }
@@ -364,7 +366,7 @@ ${data.documents.slice(0, 10).map(doc =>
                 <div className="folder-header">
                   <h5>{folder.folder_name || folder.folder_path.split('/').pop()}</h5>
                   <div className="folder-actions">
-                    {/* Preprocess button - only show if not READY */}
+                    {/* Preprocess button - show if not READY */}
                     {folder.status !== 'READY' && (
                       <button
                         onClick={() => handlePreprocessFolder(folder)}
@@ -373,6 +375,18 @@ ${data.documents.slice(0, 10).map(doc =>
                         title="Preprocess folder to scan and validate files"
                       >
                         {folder.status === 'PREPROCESSING' ? '⏳' : '🔄'}
+                      </button>
+                    )}
+
+                    {/* Reprocess button - show if READY */}
+                    {folder.status === 'READY' && (
+                      <button
+                        onClick={() => handlePreprocessFolder(folder)}
+                        className="btn btn-sm btn-warning"
+                        disabled={loading}
+                        title="Reprocess folder (files may have changed)"
+                      >
+                        🔄
                       </button>
                     )}
 
