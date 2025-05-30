@@ -134,7 +134,6 @@ class BatchService:
             Dict[str, Any]: The created batch data with preparation results
         """
         session = Session()
-        encoding_service = DocumentEncodingService()
 
         try:
             # Get the next batch number
@@ -196,57 +195,51 @@ class BatchService:
 
             logger.info(f"📄 Total documents to process: {len(all_file_paths)}")
 
-            # STAGE 1: Encode all documents and store in docs table
-            logger.info("🔄 Encoding documents...")
-            encoding_results = encoding_service.batch_encode_documents(all_file_paths, session)
-
-            # STAGE 1: Create document records with doc_id links
+            # STAGE 1: Use existing preprocessed documents instead of creating new ones
             documents_created = 0
             responses_created = 0
 
-            for file_path, doc_id in encoding_results.items():
-                if doc_id is None:
-                    logger.error(f"❌ Failed to encode {file_path}, skipping...")
+            # Process each folder to get existing documents
+            for folder_id in folder_ids:
+                folder = session.query(Folder).filter(Folder.id == folder_id).first()
+                if not folder:
+                    logger.warning(f"⚠️ Folder {folder_id} not found, skipping")
                     continue
 
-                # Find which folder this file belongs to
-                folder_id = None
-                for fid in folder_ids:
-                    folder = session.query(Folder).filter(Folder.id == fid).first()
-                    if folder and folder.folder_path and file_path.startswith(folder.folder_path):
-                        folder_id = fid
-                        break
+                # Get existing documents from the folder (from preprocessing)
+                existing_documents = session.query(Document).filter(
+                    Document.folder_id == folder_id,
+                    Document.batch_id.is_(None)  # Only get documents not already assigned to a batch
+                ).all()
 
-                # Create document record
-                document = Document(
-                    filepath=file_path,
-                    filename=os.path.basename(file_path),
-                    folder_id=folder_id,
-                    batch_id=batch.id,
-                    doc_id=doc_id,  # Link to encoded content
-                    meta_data={'meta_data': 'NONE'}  # Default document metadata
-                )
+                if not existing_documents:
+                    logger.warning(f"⚠️ No unassigned preprocessed documents found for folder {folder_id}. Please preprocess the folder first.")
+                    continue
 
-                session.add(document)
-                session.flush()  # Get document ID
-                documents_created += 1
+                logger.info(f"📄 Using {len(existing_documents)} preprocessed documents from {folder.folder_name}")
 
-                # Create LLM response records for all prompt/LLM combinations
-                prompts = config_snapshot['prompts']
-                llm_configs = config_snapshot['llm_configurations']
+                # Update existing documents to link to this batch
+                for document in existing_documents:
+                    # Update the document to link to this batch
+                    document.batch_id = batch.id
+                    documents_created += 1
 
-                for prompt in prompts:
-                    for llm_config in llm_configs:
-                        llm_response = LlmResponse(
-                            document_id=document.id,
-                            prompt_id=prompt['id'],
-                            llm_config_id=llm_config['id'],
-                            llm_name=llm_config['llm_name'],
-                            status='N',  # Not started
-                            task_id=None
-                        )
-                        session.add(llm_response)
-                        responses_created += 1
+                    # Create LLM response records for all prompt/LLM combinations
+                    prompts = config_snapshot['prompts']
+                    llm_configs = config_snapshot['llm_configurations']
+
+                    for prompt in prompts:
+                        for llm_config in llm_configs:
+                            llm_response = LlmResponse(
+                                document_id=document.id,
+                                prompt_id=prompt['id'],
+                                llm_config_id=llm_config['id'],
+                                llm_name=llm_config['llm_name'],
+                                status='N',  # Not started
+                                task_id=None
+                            )
+                            session.add(llm_response)
+                            responses_created += 1
 
             # Update batch totals
             batch.total_documents = documents_created
@@ -272,7 +265,7 @@ class BatchService:
                     'documents_created': documents_created,
                     'responses_created': responses_created,
                     'folder_stats': folder_stats,
-                    'encoding_success_rate': f"{sum(1 for doc_id in encoding_results.values() if doc_id is not None)}/{len(all_file_paths)}"
+                    'documents_used': f"{documents_created} existing preprocessed documents"
                 }
             }
 

@@ -10,8 +10,10 @@ New endpoints for the folder preprocessing workflow:
 from flask import Blueprint, request, jsonify
 import logging
 import os
-from services.folder_preprocessing_service import FolderPreprocessingService
-from database import get_db_connection
+from server.services.folder_preprocessing_service import FolderPreprocessingService
+from server.database import Session
+from server.models import Folder, Document, Doc
+from sqlalchemy import func
 
 folder_preprocessing_bp = Blueprint('folder_preprocessing', __name__)
 logger = logging.getLogger(__name__)
@@ -49,20 +51,84 @@ def preprocess_folder():
         if not os.path.isdir(folder_path):
             return jsonify({'error': f'Path is not a directory: {folder_path}'}), 400
 
-        # Start preprocessing
-        preprocessing_service = FolderPreprocessingService()
-        results = preprocessing_service.preprocess_folder(folder_path, folder_name)
+        # Start preprocessing asynchronously
+        import threading
+        import uuid
+
+        # Generate task ID for tracking
+        task_id = str(uuid.uuid4())
+
+        # Initialize task status in global storage
+        from flask import current_app
+        if not hasattr(current_app, 'preprocessing_tasks'):
+            current_app.preprocessing_tasks = {}
+
+        current_app.preprocessing_tasks[task_id] = {
+            'status': 'STARTING',
+            'folder_path': folder_path,
+            'folder_name': folder_name,
+            'progress': 0,
+            'total_files': 0,
+            'processed_files': 0,
+            'valid_files': 0,
+            'invalid_files': 0,
+            'error': None,
+            'folder_id': None
+        }
+
+        # Start preprocessing in background thread
+        def background_preprocessing():
+            try:
+                preprocessing_service = FolderPreprocessingService()
+                results = preprocessing_service.preprocess_folder_async(folder_path, folder_name, task_id)
+
+                # Update final status
+                current_app.preprocessing_tasks[task_id].update({
+                    'status': 'COMPLETED',
+                    'progress': 100,
+                    'results': results
+                })
+
+            except Exception as e:
+                logger.error(f"Background preprocessing failed: {e}")
+                current_app.preprocessing_tasks[task_id].update({
+                    'status': 'ERROR',
+                    'error': str(e)
+                })
+
+        thread = threading.Thread(target=background_preprocessing)
+        thread.daemon = True
+        thread.start()
 
         return jsonify({
-            'message': 'Folder preprocessing completed successfully',
-            'results': results
-        }), 200
+            'message': 'Folder preprocessing started',
+            'task_id': task_id
+        }), 202
 
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error preprocessing folder: {e}")
         return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
+
+@folder_preprocessing_bp.route('/api/folders/task/<task_id>/status', methods=['GET'])
+def get_task_status(task_id):
+    """Get preprocessing task status"""
+    try:
+        from flask import current_app
+
+        if not hasattr(current_app, 'preprocessing_tasks'):
+            return jsonify({'error': 'Task not found'}), 404
+
+        task = current_app.preprocessing_tasks.get(task_id)
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        return jsonify(task), 200
+
+    except Exception as e:
+        logger.error(f"Error getting task status: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @folder_preprocessing_bp.route('/api/folders/<int:folder_id>/status', methods=['GET'])
 def get_folder_status(folder_id):
@@ -85,27 +151,28 @@ def get_folder_status(folder_id):
 @folder_preprocessing_bp.route('/api/folders/ready', methods=['GET'])
 def get_ready_folders():
     """Get all folders that are ready for batch creation"""
+    session = Session()
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT f.id, f.folder_name, f.folder_path, f.status,
-                   COUNT(d.id) as total_documents,
-                   COUNT(CASE WHEN d.valid = 'Y' THEN 1 END) as valid_documents,
-                   COUNT(CASE WHEN d.valid = 'N' THEN 1 END) as invalid_documents,
-                   COALESCE(SUM(docs.file_size), 0) as total_size,
-                   f.active
-            FROM folders f
-            LEFT JOIN documents d ON f.id = d.folder_id
-            LEFT JOIN docs ON d.id = docs.document_id
-            WHERE f.status = 'READY' AND f.active = 1
-            GROUP BY f.id, f.folder_name, f.folder_path, f.status, f.active
-            ORDER BY f.folder_name
-        """)
+        # Query folders with aggregated document statistics
+        results = session.query(
+            Folder.id,
+            Folder.folder_name,
+            Folder.folder_path,
+            Folder.status,
+            func.count(Document.id).label('total_documents'),
+            func.count(func.case([(Document.valid == 'Y', 1)])).label('valid_documents'),
+            func.count(func.case([(Document.valid == 'N', 1)])).label('invalid_documents'),
+            func.coalesce(func.sum(Doc.file_size), 0).label('total_size'),
+            Folder.active
+        ).outerjoin(Document, Folder.id == Document.folder_id)\
+         .outerjoin(Doc, Document.id == Doc.document_id)\
+         .filter(Folder.status == 'READY', Folder.active == 1)\
+         .group_by(Folder.id, Folder.folder_name, Folder.folder_path, Folder.status, Folder.active)\
+         .order_by(Folder.folder_name)\
+         .all()
 
         folders = []
-        for row in cursor.fetchall():
+        for row in results:
             folders.append({
                 'id': row[0],
                 'folder_name': row[1],
@@ -127,45 +194,43 @@ def get_ready_folders():
         logger.error(f"Error getting ready folders: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
-        if conn:
-            conn.close()
+        session.close()
 
 @folder_preprocessing_bp.route('/api/folders/<int:folder_id>/documents', methods=['GET'])
 def get_folder_documents(folder_id):
     """Get all documents in a folder with their validation status"""
+    session = Session()
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
         # Get folder info
-        cursor.execute("""
-            SELECT folder_name, folder_path, status
-            FROM folders
-            WHERE id = %s
-        """, (folder_id,))
-
-        folder_info = cursor.fetchone()
-        if not folder_info:
+        folder = session.query(Folder).filter(Folder.id == folder_id).first()
+        if not folder:
             return jsonify({'error': 'Folder not found'}), 404
 
-        # Get documents
-        cursor.execute("""
-            SELECT d.id, d.filepath, d.filename, d.valid,
-                   docs.doc_type, docs.file_size,
-                   SUBSTRING(d.filepath FROM LENGTH(%s) + 2) as relative_path
-            FROM documents d
-            LEFT JOIN docs ON d.id = docs.document_id
-            WHERE d.folder_id = %s
-            ORDER BY d.filepath
-        """, (folder_info[1], folder_id))
+        # Get documents with their doc info
+        documents_query = session.query(
+            Document.id,
+            Document.filepath,
+            Document.filename,
+            Document.valid,
+            Doc.doc_type,
+            Doc.file_size
+        ).outerjoin(Doc, Document.id == Doc.document_id)\
+         .filter(Document.folder_id == folder_id)\
+         .order_by(Document.filepath)\
+         .all()
 
         documents = []
-        for row in cursor.fetchall():
+        for row in documents_query:
+            # Calculate relative path
+            relative_path = row[1]
+            if folder.folder_path and row[1].startswith(folder.folder_path):
+                relative_path = row[1][len(folder.folder_path):].lstrip('/')
+
             documents.append({
                 'id': row[0],
                 'file_path': row[1],
                 'filename': row[2],
-                'relative_path': row[6],
+                'relative_path': relative_path,
                 'valid': row[3] == 'Y',
                 'doc_type': row[4],
                 'file_size': row[5] or 0
@@ -174,9 +239,9 @@ def get_folder_documents(folder_id):
         return jsonify({
             'folder': {
                 'id': folder_id,
-                'folder_name': folder_info[0],
-                'folder_path': folder_info[1],
-                'status': folder_info[2]
+                'folder_name': folder.folder_name,
+                'folder_path': folder.folder_path,
+                'status': folder.status
             },
             'documents': documents,
             'total_documents': len(documents),
@@ -188,44 +253,31 @@ def get_folder_documents(folder_id):
         logger.error(f"Error getting folder documents: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
-        if conn:
-            conn.close()
+        session.close()
 
 @folder_preprocessing_bp.route('/api/folders/<int:folder_id>/reprocess', methods=['POST'])
 def reprocess_folder(folder_id):
     """Reprocess an existing folder (clear existing documents and reprocess)"""
+    session = Session()
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
         # Get folder info
-        cursor.execute("""
-            SELECT folder_name, folder_path
-            FROM folders
-            WHERE id = %s
-        """, (folder_id,))
-
-        folder_info = cursor.fetchone()
-        if not folder_info:
+        folder = session.query(Folder).filter(Folder.id == folder_id).first()
+        if not folder:
             return jsonify({'error': 'Folder not found'}), 404
 
-        folder_name, folder_path = folder_info
+        folder_name = folder.folder_name
+        folder_path = folder.folder_path
 
-        # Delete existing documents and docs for this folder
-        cursor.execute("""
-            DELETE FROM docs
-            WHERE document_id IN (
-                SELECT id FROM documents WHERE folder_id = %s
-            )
-        """, (folder_id,))
+        # Delete existing docs for documents in this folder
+        docs_to_delete = session.query(Doc).join(Document).filter(Document.folder_id == folder_id)
+        docs_to_delete.delete(synchronize_session=False)
 
-        cursor.execute("""
-            DELETE FROM documents
-            WHERE folder_id = %s
-        """, (folder_id,))
+        # Delete existing documents for this folder
+        documents_to_delete = session.query(Document).filter(Document.folder_id == folder_id)
+        documents_to_delete.delete(synchronize_session=False)
 
-        conn.commit()
-        conn.close()
+        session.commit()
+        session.close()
 
         # Start preprocessing
         preprocessing_service = FolderPreprocessingService()
@@ -237,8 +289,8 @@ def reprocess_folder(folder_id):
         }), 200
 
     except Exception as e:
-        if conn:
-            conn.rollback()
-            conn.close()
+        if session:
+            session.rollback()
+            session.close()
         logger.error(f"Error reprocessing folder: {e}")
         return jsonify({'error': f'Reprocessing failed: {str(e)}'}), 500

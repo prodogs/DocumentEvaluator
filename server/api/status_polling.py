@@ -156,15 +156,64 @@ class StatusPollingService:
         try:
             # Extract results from the response
             results = status_result.get('results', [])
+            scoring_result = status_result.get('scoring_result', {})
+            processing_strategies = status_result.get('processing_strategies', {})
 
-            # Combine all prompt responses into a single response text
+            # Store the complete response data (including scores and processing strategies)
+            response_json = status_result
+
+            # Extract overall score (0-100 suitability score)
+            overall_score = None
+            if scoring_result and 'overall_score' in scoring_result:
+                overall_score = scoring_result.get('overall_score')
+                # Ensure it's a valid number
+                try:
+                    overall_score = float(overall_score) if overall_score is not None else None
+                except (ValueError, TypeError):
+                    overall_score = None
+
+            # Create formatted response text including score information
             response_text = ""
-            response_json = {}
 
+            # Add score information at the top if available
+            if scoring_result:
+                response_text += "=== SCORING RESULTS ===\n"
+                if overall_score is not None:
+                    response_text += f"Overall Suitability Score: {overall_score}/100\n"
+
+                confidence = scoring_result.get('confidence')
+                if confidence is not None:
+                    response_text += f"Confidence: {confidence}\n"
+
+                provider_name = scoring_result.get('provider_name')
+                if provider_name:
+                    response_text += f"Provider: {provider_name}\n"
+
+                # Add subscores if available
+                subscores = scoring_result.get('subscores', {})
+                if subscores:
+                    response_text += "\nSubscores:\n"
+                    for subscore_name, subscore_data in subscores.items():
+                        if isinstance(subscore_data, dict):
+                            score = subscore_data.get('score', 'N/A')
+                            comment = subscore_data.get('comment', '')
+                            response_text += f"  {subscore_name}: {score}"
+                            if comment:
+                                response_text += f" - {comment}"
+                            response_text += "\n"
+
+                # Add improvement recommendations if available
+                recommendations = scoring_result.get('improvement_recommendations', [])
+                if recommendations:
+                    response_text += "\nImprovement Recommendations:\n"
+                    for i, rec in enumerate(recommendations, 1):
+                        response_text += f"  {i}. {rec}\n"
+
+                response_text += "\n" + "="*50 + "\n\n"
+
+            # Add prompt results
             if results:
-                response_json = {"results": results}
-
-                # Create a formatted response text
+                response_text += "=== PROMPT RESULTS ===\n"
                 for i, result in enumerate(results):
                     prompt = result.get('prompt', 'Unknown prompt')
                     response = result.get('response', 'No response')
@@ -179,8 +228,8 @@ class StatusPollingService:
 
                     response_text += "\n" + "="*50 + "\n\n"
             else:
-                response_text = status_result.get('message', 'Task completed successfully')
-                response_json = status_result
+                if not scoring_result:  # Only show this if we don't have scoring results
+                    response_text = status_result.get('message', 'Task completed successfully')
 
             # Calculate end-to-end response time
             end_to_end_time_ms = self._calculate_end_to_end_time(llm_response)
@@ -191,6 +240,7 @@ class StatusPollingService:
             llm_response.response_text = response_text
             llm_response.response_json = json.dumps(response_json)
             llm_response.error_message = None
+            llm_response.overall_score = overall_score  # Store the suitability score (0-100)
 
             # Update response_time_ms with end-to-end time (overwriting the initial submission time)
             if end_to_end_time_ms is not None:

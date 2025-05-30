@@ -2,7 +2,8 @@ import os
 from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import inspect
-from ..app import Session, Folder
+from server.database import Session
+from server.models import Folder
 
 folder_routes = Blueprint('folder_routes', __name__)
 

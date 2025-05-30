@@ -619,6 +619,7 @@
 .folder-card.PREPROCESSING {
   background-color: #fff8e1 !important;
   border-left: 5px solid #ffc107 !important;
+  animation: pulse-yellow 2s infinite;
 }
 
 .folder-card.ERROR {
@@ -629,6 +630,21 @@
 .folder-card.not-processed {
   background-color: #f8f9fa !important;
   border-left: 5px solid #6c757d !important;
+}
+
+/* Pulse animation for processing folders */
+@keyframes pulse-yellow {
+  0% {
+    border-left-color: #ffc107;
+  }
+
+  50% {
+    border-left-color: #ffeb3b;
+  }
+
+  100% {
+    border-left-color: #ffc107;
+  }
 }
 
 /* Processing status indicators */
@@ -664,4 +680,185 @@
   background-color: #e2e3e5;
   color: #495057;
   border: 1px solid #ced4da;
+}
+
+/* Folder Processing Section */
+.folder-processing-section {
+  margin-top: 15px;
+  border-top: 2px solid #e9ecef;
+  background: rgba(248, 249, 250, 0.5);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.processing-status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.processing-status-header strong {
+  color: #212529;
+  font-size: 14px;
+}
+
+/* Status Line - Status and Processing Status on same line */
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.status-line strong {
+  margin-right: 5px;
+}
+
+.status-line .status {
+  margin-right: 10px;
+}
+
+.status-line .processing-status {
+  margin-left: auto;
+}
+
+/* Folder Path Toggle */
+.folder-path-toggle {
+  margin-top: 8px;
+}
+
+.folder-path-toggle .btn-link {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: #007bff;
+  text-decoration: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.folder-path-toggle .btn-link:hover {
+  text-decoration: underline;
+  color: #0056b3;
+}
+
+/* Expanded Details */
+.folder-expanded-details {
+  margin-top: 15px;
+  padding: 12px;
+  border-top: 1px solid #e9ecef;
+  background: rgba(248, 249, 250, 0.3);
+  border-radius: 6px;
+}
+
+/* Processing Progress */
+.processing-progress {
+  margin-top: 15px;
+  padding: 12px;
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 6px;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.progress-percentage {
+  font-weight: bold;
+  color: #856404;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 20px;
+  background-color: #f8f9fa;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ffc107, #ffeb3b);
+  transition: width 0.3s ease;
+  border-radius: 10px;
+}
+
+.progress-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 12px;
+  color: #856404;
+}
+
+.progress-details div {
+  padding: 2px 0;
+}
+
+/* Folder Statistics */
+.folder-statistics {
+  margin-top: 15px;
+  padding: 12px;
+  background: #d4edda;
+  border: 1px solid #c3e6cb;
+  border-radius: 6px;
+}
+
+.stats-header {
+  margin-bottom: 10px;
+  color: #155724;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.stat-label {
+  font-weight: 600;
+  color: #495057;
+}
+
+.stat-value {
+  font-weight: 700;
+  color: #212529;
+}
+
+/* Legacy progress text animation */
+.progress-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #856404;
+  animation: pulse-text 1.5s infinite;
+}
+
+@keyframes pulse-text {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
 }

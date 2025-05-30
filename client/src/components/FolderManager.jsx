@@ -14,18 +14,126 @@ const FolderManager = ({ onFoldersChange }) => {
     folder_name: '',
     active: false  // Changed default to false - folders should not be active until preprocessed
   });
+  const [folderStats, setFolderStats] = useState({});
+  const [pollingIntervals, setPollingIntervals] = useState({});
+  const [expandedFolders, setExpandedFolders] = useState({});
 
   useEffect(() => {
     loadFolders();
   }, []);
 
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollingIntervals).forEach(interval => {
+        if (interval) clearInterval(interval);
+      });
+    };
+  }, [pollingIntervals]);
+
+  const startTaskPolling = (folderId, taskId) => {
+    // Clear existing interval if any
+    if (pollingIntervals[folderId]) {
+      clearInterval(pollingIntervals[folderId]);
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/folders/task/${taskId}/status`);
+        const taskStatus = response.data;
+
+        // Update folder stats with task progress
+        setFolderStats(prev => ({
+          ...prev,
+          [folderId]: {
+            ...taskStatus,
+            status: taskStatus.status === 'COMPLETED' ? 'READY' :
+              taskStatus.status === 'ERROR' ? 'ERROR' : 'PREPROCESSING'
+          }
+        }));
+
+        // Update folder status in the list
+        setFolders(prev => prev.map(f =>
+          f.id === folderId ? {
+            ...f,
+            status: taskStatus.status === 'COMPLETED' ? 'READY' :
+              taskStatus.status === 'ERROR' ? 'ERROR' : 'PREPROCESSING'
+          } : f
+        ));
+
+        // If processing is complete, stop polling and refresh folders
+        if (taskStatus.status === 'COMPLETED' || taskStatus.status === 'ERROR') {
+          clearInterval(interval);
+          setPollingIntervals(prev => {
+            const newIntervals = { ...prev };
+            delete newIntervals[folderId];
+            return newIntervals;
+          });
+
+          // Refresh folders to get final status
+          setTimeout(() => loadFolders(), 1000);
+        }
+      } catch (error) {
+        console.error(`Error polling task ${taskId} status:`, error);
+        clearInterval(interval);
+        setPollingIntervals(prev => {
+          const newIntervals = { ...prev };
+          delete newIntervals[folderId];
+          return newIntervals;
+        });
+      }
+    }, 1000); // Poll every 1 second for better responsiveness
+
+    setPollingIntervals(prev => ({
+      ...prev,
+      [folderId]: interval
+    }));
+  };
+
   const loadFolders = async () => {
     try {
       setLoading(true);
       const response = await axios.get(`${API_BASE_URL}/api/folders`);
-      setFolders(response.data.folders || []);
+      const folders = response.data.folders || [];
+
+      // Fix any folders that are active but not processed
+      const invalidActiveFolders = folders.filter(folder =>
+        folder.active && (!folder.status || folder.status === 'NOT_PROCESSED' || folder.status === null)
+      );
+
+      for (const folder of invalidActiveFolders) {
+        try {
+          console.log(`Deactivating folder ${folder.id} - active but not processed`);
+          await axios.put(`${API_BASE_URL}/api/folders/${folder.id}`, { active: false });
+          folder.active = false; // Update local state
+        } catch (error) {
+          console.error(`Error deactivating folder ${folder.id}:`, error);
+        }
+      }
+
+      setFolders(folders);
+
+      // Load statistics for READY folders
+      const readyFolders = folders.filter(folder => folder.status === 'READY');
+      for (const folder of readyFolders) {
+        try {
+          const statsResponse = await axios.get(`${API_BASE_URL}/api/folders/${folder.id}/status`);
+          setFolderStats(prev => ({
+            ...prev,
+            [folder.id]: statsResponse.data.folder_status
+          }));
+        } catch (error) {
+          console.error(`Error loading stats for folder ${folder.id}:`, error);
+        }
+      }
+
       if (onFoldersChange) {
-        onFoldersChange(response.data.folders || []);
+        onFoldersChange(folders);
+      }
+
+      // Show message if we deactivated any folders
+      if (invalidActiveFolders.length > 0) {
+        setMessage(`Automatically deactivated ${invalidActiveFolders.length} folder(s) that were active but not processed. Please preprocess them first.`);
       }
     } catch (error) {
       console.error('Error loading folders:', error);
@@ -111,30 +219,29 @@ const FolderManager = ({ onFoldersChange }) => {
 
   const handlePreprocessFolder = async (folder) => {
     const isReprocessing = folder.status === 'READY';
-    const action = isReprocessing ? 'reprocess' : 'preprocess';
-
-    if (!window.confirm(`Start ${action}ing "${folder.folder_name || folder.folder_path}"?\n\nThis will scan all files in the folder and prepare them for batch processing.`)) {
-      return;
-    }
 
     try {
-      setLoading(true);
-      // Clear any existing messages
+      // Don't set global loading - only disable the specific button
       setMessage('');
 
-      await axios.post(`${API_BASE_URL}/api/folders/preprocess`, {
+      const response = await axios.post(`${API_BASE_URL}/api/folders/preprocess`, {
         folder_path: folder.folder_path,
         folder_name: folder.folder_name || folder.folder_path.split('/').pop()
       });
 
-      // Don't show global message for preprocessing - status will be shown in folder card
-      // Refresh folders to show updated status
-      loadFolders();
+      const taskId = response.data.task_id;
+      if (taskId) {
+        // Start polling for task progress
+        startTaskPolling(folder.id, taskId);
+
+        // Update folder status to show it's processing
+        setFolders(prev => prev.map(f =>
+          f.id === folder.id ? { ...f, status: 'PREPROCESSING' } : f
+        ));
+      }
     } catch (error) {
-      console.error('Error preprocessing folder:', error);
-      setMessage(`${isReprocessing ? 'Reprocessing' : 'Preprocessing'} failed: ${error.response?.data?.error || error.message}`);
-    } finally {
-      setLoading(false);
+      console.error('Error starting preprocessing:', error);
+      setMessage(`${isReprocessing ? 'Reprocessing' : 'Preprocessing'} failed to start: ${error.response?.data?.error || error.message}`);
     }
   };
 
@@ -167,7 +274,7 @@ ${data.documents.slice(0, 10).map(doc =>
     setFormData({
       folder_path: '',
       folder_name: '',
-      active: true
+      active: false  // New folders should not be active by default
     });
     setEditingFolder(null);
     setShowForm(false);
@@ -229,6 +336,14 @@ ${data.documents.slice(0, 10).map(doc =>
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleDateString();
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
   const getProcessingStatusDisplay = (status) => {
@@ -340,6 +455,9 @@ ${data.documents.slice(0, 10).map(doc =>
               />
               Active
             </label>
+            <small className="form-help">
+              Note: Folders must be preprocessed before they can be activated. New folders will need to be processed first.
+            </small>
           </div>
 
           <div className="form-actions">
@@ -430,24 +548,91 @@ ${data.documents.slice(0, 10).map(doc =>
                 </div>
 
                 <div className="folder-details">
-                  <div className="folder-path">
-                    <strong>Path:</strong>
-                    <code>{folder.folder_path}</code>
-                  </div>
                   <div className="folder-meta">
                     <div><strong>ID:</strong> {folder.id}</div>
                     <div><strong>Added:</strong> {formatDate(folder.created_at)}</div>
-                    <div><strong>Status:</strong>
+                    <div className="status-line">
+                      <strong>Status:</strong>
                       <span className={`status ${folder.active ? 'active' : 'inactive'}`}>
                         {folder.active ? 'Active' : 'Inactive'}
                       </span>
-                    </div>
-                    <div><strong>Processing:</strong>
                       <span className={`processing-status ${folder.status || 'not-processed'}`}>
                         {getProcessingStatusDisplay(folder.status)}
                       </span>
                     </div>
+                    <div className="folder-path-toggle">
+                      <button
+                        className="btn btn-sm btn-link"
+                        onClick={() => setExpandedFolders(prev => ({
+                          ...prev,
+                          [folder.id]: !prev[folder.id]
+                        }))}
+                        title="Toggle details"
+                      >
+                        {expandedFolders[folder.id] ? '▼' : '▶'} Details
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Collapsible details */}
+                  {expandedFolders[folder.id] && (
+                    <div className="folder-expanded-details">
+                      <div className="folder-path">
+                        <strong>Path:</strong>
+                        <code>{folder.folder_path}</code>
+                      </div>
+
+                      {/* Processing Status Section */}
+                      <div className="folder-processing-section">
+
+                        {/* Show statistics if folder is READY */}
+                        {folder.status === 'READY' && folderStats[folder.id] && (
+                          <div className="folder-statistics">
+                            <div className="stats-grid">
+                              <div className="stat-item">
+                                <span className="stat-label">Files:</span>
+                                <span className="stat-value">{folderStats[folder.id].total_files || 0}</span>
+                              </div>
+                              <div className="stat-item">
+                                <span className="stat-label">Valid:</span>
+                                <span className="stat-value">{folderStats[folder.id].valid_files || 0}</span>
+                              </div>
+                              <div className="stat-item">
+                                <span className="stat-label">Errors:</span>
+                                <span className="stat-value">{folderStats[folder.id].invalid_files || 0}</span>
+                              </div>
+                              <div className="stat-item">
+                                <span className="stat-label">Size:</span>
+                                <span className="stat-value">{formatFileSize(folderStats[folder.id].total_size || 0)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Show real-time processing progress if PREPROCESSING */}
+                        {folder.status === 'PREPROCESSING' && folderStats[folder.id] && (
+                          <div className="processing-progress">
+                            <div className="progress-header">
+                              <strong>Processing Progress:</strong>
+                              <span className="progress-percentage">{folderStats[folder.id].progress || 0}%</span>
+                            </div>
+                            <div className="progress-bar">
+                              <div
+                                className="progress-fill"
+                                style={{ width: `${folderStats[folder.id].progress || 0}%` }}
+                              ></div>
+                            </div>
+                            <div className="progress-details">
+                              <div>Files: {folderStats[folder.id].processed_files || 0} / {folderStats[folder.id].total_files || 0}</div>
+                              <div>Valid: {folderStats[folder.id].valid_files || 0}</div>
+                              <div>Invalid: {folderStats[folder.id].invalid_files || 0}</div>
+                              <div>Status: {folderStats[folder.id].status || 'Processing'}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

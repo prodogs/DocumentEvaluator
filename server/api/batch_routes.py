@@ -284,6 +284,104 @@ def register_batch_routes(app):
                 'error': str(e)
             }), 500
 
+    @app.route('/api/batches/<int:batch_id>/llm-responses', methods=['GET'])
+    def get_batch_llm_responses(batch_id):
+        """Get all LLM responses for a specific batch"""
+        try:
+            from server.database import Session
+            from server.models import Batch, LlmResponse, Document, Prompt, LlmConfiguration
+            from sqlalchemy.orm import joinedload
+
+            session = Session()
+            try:
+                # Verify batch exists
+                batch = session.query(Batch).filter_by(id=batch_id).first()
+                if not batch:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Batch {batch_id} not found'
+                    }), 404
+
+                # Get query parameters
+                limit = request.args.get('limit', 100, type=int)
+                offset = request.args.get('offset', 0, type=int)
+                status_filter = request.args.get('status', None)
+
+                # Build query for LLM responses in this batch
+                query = session.query(LlmResponse).options(
+                    joinedload(LlmResponse.document),
+                    joinedload(LlmResponse.prompt),
+                    joinedload(LlmResponse.llm_config)
+                ).join(Document).filter(Document.batch_id == batch_id)
+
+                # Apply status filter if provided
+                if status_filter:
+                    query = query.filter(LlmResponse.status == status_filter.upper())
+
+                # Get total count for pagination
+                total_count = query.count()
+
+                # Apply pagination and ordering
+                responses = query.order_by(
+                    LlmResponse.timestamp.desc()
+                ).offset(offset).limit(limit).all()
+
+                # Format response data
+                response_list = []
+                for response in responses:
+                    response_data = {
+                        'id': response.id,
+                        'task_id': response.task_id,
+                        'status': response.status,
+                        'started_processing_at': response.started_processing_at.isoformat() if response.started_processing_at else None,
+                        'completed_processing_at': response.completed_processing_at.isoformat() if response.completed_processing_at else None,
+                        'response_time_ms': response.response_time_ms,
+                        'error_message': response.error_message,
+                        'overall_score': response.overall_score,  # Include suitability score (0-100)
+                        'response_json': response.response_json,  # Include full response JSON for detailed view
+                        'response_text': response.response_text,  # Include response text for detailed view
+                        'timestamp': response.timestamp.isoformat() if response.timestamp else None,
+                        'document': {
+                            'id': response.document.id,
+                            'filename': response.document.filename,
+                            'filepath': response.document.filepath
+                        } if response.document else None,
+                        'prompt': {
+                            'id': response.prompt.id,
+                            'description': response.prompt.description,
+                            'prompt_text': response.prompt.prompt_text[:100] + '...' if response.prompt and len(response.prompt.prompt_text) > 100 else response.prompt.prompt_text if response.prompt else None
+                        } if response.prompt else None,
+                        'llm_config': {
+                            'id': response.llm_config.id if response.llm_config else None,
+                            'llm_name': response.llm_name,
+                            'model_name': response.llm_config.model_name if response.llm_config else None,
+                            'provider_type': response.llm_config.provider_type if response.llm_config else None
+                        }
+                    }
+                    response_list.append(response_data)
+
+                return jsonify({
+                    'success': True,
+                    'batch_id': batch_id,
+                    'responses': response_list,
+                    'pagination': {
+                        'total': total_count,
+                        'limit': limit,
+                        'offset': offset,
+                        'has_more': offset + limit < total_count
+                    }
+                }), 200
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error getting batch LLM responses: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
     @app.route('/api/batches/<int:batch_id>/config-snapshot', methods=['GET'])
     def get_batch_config_snapshot(batch_id):
         """Get the configuration snapshot for a specific batch"""

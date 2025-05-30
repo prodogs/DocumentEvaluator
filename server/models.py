@@ -1,7 +1,7 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, LargeBinary
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, LargeBinary, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from server.database import Base
+from database import Base
 
 class Batch(Base):
     __tablename__ = 'batches'
@@ -28,6 +28,7 @@ class Folder(Base):
     folder_path = Column(Text, unique=True, nullable=False)
     folder_name = Column(Text)
     active = Column(Integer, default=1, nullable=False)  # 0 = inactive, 1 = active
+    status = Column(Text, default='NOT_PROCESSED', nullable=False)  # NOT_PROCESSED, PREPROCESSING, READY, ERROR
     created_at = Column(DateTime, default=func.now())
 
     documents = relationship("Document", back_populates="folder")
@@ -36,6 +37,7 @@ class Doc(Base):
     """Table to store encoded document content"""
     __tablename__ = 'docs'
     id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)  # Link to document
     content = Column(LargeBinary, nullable=False)  # Base64 encoded document content
     content_type = Column(Text, nullable=True)  # MIME type of the document
     doc_type = Column(Text, nullable=True)  # Document type/extension (e.g., 'pdf', 'docx', 'txt')
@@ -43,8 +45,8 @@ class Doc(Base):
     encoding = Column(Text, default='base64', nullable=False)  # Encoding method used
     created_at = Column(DateTime, default=func.now())
 
-    # Relationship to documents
-    documents = relationship("Document", back_populates="doc")
+    # Relationship to document
+    document = relationship("Document", back_populates="docs")
 
 class Document(Base):
     __tablename__ = 'documents'
@@ -53,15 +55,15 @@ class Document(Base):
     filename = Column(Text, nullable=False)
     folder_id = Column(Integer, ForeignKey('folders.id'), nullable=True)
     batch_id = Column(Integer, ForeignKey('batches.id'), nullable=True)  # Link to batch
-    doc_id = Column(Integer, ForeignKey('docs.id'), nullable=True)  # Link to encoded document content
     meta_data = Column(JSON, default={'meta_data': 'NONE'}, nullable=False)  # Document-level metadata
+    valid = Column(Text, default='Y', nullable=False)  # Y = valid, N = invalid (for folder preprocessing)
     created_at = Column(DateTime, default=func.now())
     task_id = Column(Text, nullable=True)  # Task ID for LLM processing recovery
 
     llm_responses = relationship("LlmResponse", back_populates="document")
     folder = relationship("Folder", back_populates="documents")
     batch = relationship("Batch", back_populates="documents")
-    doc = relationship("Doc", back_populates="documents")
+    docs = relationship("Doc", back_populates="document")
 
 class Prompt(Base):
     __tablename__ = 'prompts'
@@ -100,6 +102,7 @@ class LlmResponse(Base):
     response_text = Column(Text)  # Added column for response text
     response_time_ms = Column(Integer)
     error_message = Column(Text)
+    overall_score = Column(Float, nullable=True)  # Suitability score (0-100) for LLM readiness
     timestamp = Column(DateTime, default=func.now())
 
     document = relationship("Document", back_populates="llm_responses")

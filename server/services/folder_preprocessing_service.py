@@ -16,7 +16,9 @@ from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import base64
 
-from database import get_db_connection
+from server.database import Session
+from server.models import Folder, Document, Doc
+from sqlalchemy import text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +38,96 @@ class FolderPreprocessingService:
     MIN_FILE_SIZE = 1  # 1 byte minimum
 
     def __init__(self):
-        self.conn = None
+        self.session = None
+
+    def preprocess_folder_async(self, folder_path: str, folder_name: str, task_id: str) -> Dict:
+        """
+        Preprocess a folder asynchronously with progress updates
+
+        Args:
+            folder_path: Path to the folder to preprocess
+            folder_name: User-provided name for the folder
+            task_id: Task ID for progress tracking
+
+        Returns:
+            Dict with processing results
+        """
+        try:
+            from flask import current_app
+
+            # Update task status
+            def update_task_status(**kwargs):
+                if hasattr(current_app, 'preprocessing_tasks') and task_id in current_app.preprocessing_tasks:
+                    current_app.preprocessing_tasks[task_id].update(kwargs)
+
+            # 1. Connect to database
+            self.session = Session()
+
+            update_task_status(status='SCANNING')
+
+            # 2. Update folder status to PREPROCESSING
+            folder_id = self._get_or_create_folder(folder_path, folder_name)
+            self._update_folder_status(folder_id, 'PREPROCESSING')
+            self.session.commit()
+
+            update_task_status(folder_id=folder_id, status='PROCESSING')
+
+            logger.info(f"🔄 Starting preprocessing for folder: {folder_name} (ID: {folder_id})")
+
+            # 3. Scan all files in folder
+            files_info = self._scan_folder_files(folder_path)
+            logger.info(f"📁 Found {len(files_info)} files in folder")
+
+            update_task_status(total_files=len(files_info), status='PROCESSING_FILES')
+
+            # 4. Process each file with progress updates
+            results = {
+                'folder_id': folder_id,
+                'folder_name': folder_name,
+                'total_files': len(files_info),
+                'valid_files': 0,
+                'invalid_files': 0,
+                'total_size': 0,
+                'errors': []
+            }
+
+            for i, file_info in enumerate(files_info):
+                try:
+                    self._process_single_file(folder_id, file_info, results)
+                    self.session.commit()  # Commit after each file
+
+                    # Update progress
+                    progress = int((i + 1) / len(files_info) * 90)  # 90% for file processing
+                    update_task_status(
+                        processed_files=i + 1,
+                        valid_files=results['valid_files'],
+                        invalid_files=results['invalid_files'],
+                        progress=progress
+                    )
+
+                except Exception as e:
+                    self.session.rollback()
+                    error_msg = f"Error processing {file_info['path']}: {str(e)}"
+                    logger.error(error_msg)
+                    results['errors'].append(error_msg)
+
+            # 5. Update folder status to READY
+            self._update_folder_status(folder_id, 'READY')
+            self.session.commit()
+
+            update_task_status(status='COMPLETED', progress=100)
+
+            logger.info(f"✅ Preprocessing completed: {results['valid_files']} valid, {results['invalid_files']} invalid files")
+            return results
+
+        except Exception as e:
+            logger.error(f"❌ Folder preprocessing failed: {e}")
+            if self.session:
+                self.session.rollback()
+            raise e
+        finally:
+            if self.session:
+                self.session.close()
 
     def preprocess_folder(self, folder_path: str, folder_name: str) -> Dict:
         """
@@ -50,17 +141,16 @@ class FolderPreprocessingService:
             Dict with preprocessing results
         """
         try:
-            self.conn = get_db_connection()
-            cursor = self.conn.cursor()
+            self.session = Session()
 
             # 1. Validate folder exists
             if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
                 raise ValueError(f"Folder does not exist: {folder_path}")
 
             # 2. Update folder status to PREPROCESSING
-            folder_id = self._get_or_create_folder(cursor, folder_path, folder_name)
-            self._update_folder_status(cursor, folder_id, 'PREPROCESSING')
-            self.conn.commit()
+            folder_id = self._get_or_create_folder(folder_path, folder_name)
+            self._update_folder_status(folder_id, 'PREPROCESSING')
+            self.session.commit()
 
             logger.info(f"🔄 Starting preprocessing for folder: {folder_name} (ID: {folder_id})")
 
@@ -81,72 +171,70 @@ class FolderPreprocessingService:
 
             for file_info in files_info:
                 try:
-                    self._process_single_file(cursor, folder_id, file_info, results)
-                    self.conn.commit()  # Commit after each file to avoid transaction issues
+                    self._process_single_file(folder_id, file_info, results)
+                    self.session.commit()  # Commit after each file to avoid transaction issues
                 except Exception as e:
-                    self.conn.rollback()  # Rollback on error
+                    self.session.rollback()  # Rollback on error
                     error_msg = f"Error processing {file_info['path']}: {str(e)}"
                     logger.error(error_msg)
                     results['errors'].append(error_msg)
 
             # 5. Update folder status to READY
-            self._update_folder_status(cursor, folder_id, 'READY')
-            self.conn.commit()
+            self._update_folder_status(folder_id, 'READY')
+            self.session.commit()
 
             logger.info(f"✅ Preprocessing completed: {results['valid_files']} valid, {results['invalid_files']} invalid files")
             return results
 
         except Exception as e:
-            if self.conn:
-                self.conn.rollback()
+            if self.session:
+                self.session.rollback()
                 # Update folder status to ERROR
                 try:
-                    cursor = self.conn.cursor()
                     if 'folder_id' in locals():
-                        self._update_folder_status(cursor, folder_id, 'ERROR')
-                        self.conn.commit()
-                except:
+                        self._update_folder_status(folder_id, 'ERROR')
+                        self.session.commit()
+                except Exception:
                     pass
             logger.error(f"❌ Folder preprocessing failed: {e}")
             raise
         finally:
-            if self.conn:
-                self.conn.close()
+            if self.session:
+                self.session.close()
 
-    def _get_or_create_folder(self, cursor, folder_path: str, folder_name: str) -> int:
+    def _get_or_create_folder(self, folder_path: str, folder_name: str) -> int:
         """Get existing folder or create new one"""
-        # Check if folder already exists
-        cursor.execute("""
-            SELECT id FROM folders
-            WHERE folder_path = %s
-        """, (folder_path,))
+        from server.models import Folder
 
-        result = cursor.fetchone()
-        if result:
-            folder_id = result[0]
+        # Check if folder already exists
+        existing_folder = self.session.query(Folder).filter(Folder.folder_path == folder_path).first()
+
+        if existing_folder:
             # Update folder name if different
-            cursor.execute("""
-                UPDATE folders
-                SET folder_name = %s, status = 'PREPROCESSING'
-                WHERE id = %s
-            """, (folder_name, folder_id))
-            return folder_id
+            existing_folder.folder_name = folder_name
+            existing_folder.status = 'PREPROCESSING'
+            self.session.flush()  # Get the ID without committing
+            return existing_folder.id
         else:
             # Create new folder
-            cursor.execute("""
-                INSERT INTO folders (folder_name, folder_path, active, status)
-                VALUES (%s, %s, 1, 'PREPROCESSING')
-                RETURNING id
-            """, (folder_name, folder_path))
-            return cursor.fetchone()[0]
+            new_folder = Folder(
+                folder_name=folder_name,
+                folder_path=folder_path,
+                active=1,
+                status='PREPROCESSING'
+            )
+            self.session.add(new_folder)
+            self.session.flush()  # Get the ID without committing
+            return new_folder.id
 
-    def _update_folder_status(self, cursor, folder_id: int, status: str):
+    def _update_folder_status(self, folder_id: int, status: str):
         """Update folder preprocessing status"""
-        cursor.execute("""
-            UPDATE folders
-            SET status = %s
-            WHERE id = %s
-        """, (status, folder_id))
+        from server.models import Folder
+
+        folder = self.session.query(Folder).filter(Folder.id == folder_id).first()
+        if folder:
+            folder.status = status
+            self.session.flush()
 
     def _scan_folder_files(self, folder_path: str) -> List[Dict]:
         """Scan folder and return list of all files with metadata"""
@@ -197,35 +285,39 @@ class FolderPreprocessingService:
 
         return True, "Valid"
 
-    def _process_single_file(self, cursor, folder_id: int, file_info: Dict, results: Dict):
+    def _process_single_file(self, folder_id: int, file_info: Dict, results: Dict):
         """Process a single file: validate, create document record, store in docs"""
+        from server.models import Document, Doc
 
         # 1. Validate file
         is_valid, validation_reason = self._validate_file(file_info)
         valid_flag = 'Y' if is_valid else 'N'
 
         # 2. Create document record
-        cursor.execute("""
-            INSERT INTO documents (folder_id, filepath, filename, valid)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id
-        """, (folder_id, file_info['path'], file_info['name'], valid_flag))
-
-        document_id = cursor.fetchone()[0]
+        document = Document(
+            folder_id=folder_id,
+            filepath=file_info['path'],
+            filename=file_info['name'],
+            valid=valid_flag
+        )
+        self.session.add(document)
+        self.session.flush()  # Get the ID without committing
 
         # 3. Read and encode file content
         try:
             with open(file_info['path'], 'rb') as f:
                 file_content = f.read()
 
-            encoded_content = base64.b64encode(file_content).decode('utf-8')
+            encoded_content = base64.b64encode(file_content)
 
             # 4. Store in docs table with file size
-            cursor.execute("""
-                INSERT INTO docs (document_id, doc_type, content, file_size)
-                VALUES (%s, %s, %s, %s)
-            """, (document_id, file_info['extension'][1:] if file_info['extension'] else 'unknown',
-                  encoded_content.encode('utf-8'), file_info['size']))
+            doc = Doc(
+                document_id=document.id,
+                doc_type=file_info['extension'][1:] if file_info['extension'] else 'unknown',
+                content=encoded_content,
+                file_size=file_info['size']
+            )
+            self.session.add(doc)
 
             # 5. Update results
             results['total_size'] += file_info['size']
@@ -237,45 +329,46 @@ class FolderPreprocessingService:
 
         except Exception as e:
             # If we can't read/encode the file, mark as invalid
-            cursor.execute("""
-                UPDATE documents
-                SET valid = 'N'
-                WHERE id = %s
-            """, (document_id,))
+            document.valid = 'N'
+            self.session.flush()
 
             results['invalid_files'] += 1
             logger.error(f"❌ Failed to process file {file_info['path']}: {e}")
 
     def get_folder_status(self, folder_id: int) -> Optional[Dict]:
         """Get folder preprocessing status and statistics"""
+        session = Session()
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            from server.models import Folder, Document, Doc
+            from sqlalchemy import func
 
-            cursor.execute("""
-                SELECT f.id, f.folder_name, f.folder_path, f.status,
-                       COUNT(d.id) as total_documents,
-                       COUNT(CASE WHEN d.valid = 'Y' THEN 1 END) as valid_documents,
-                       COUNT(CASE WHEN d.valid = 'N' THEN 1 END) as invalid_documents,
-                       COALESCE(SUM(docs.file_size), 0) as total_size
-                FROM folders f
-                LEFT JOIN documents d ON f.id = d.folder_id
-                LEFT JOIN docs ON d.id = docs.document_id
-                WHERE f.id = %s
-                GROUP BY f.id, f.folder_name, f.folder_path, f.status
-            """, (folder_id,))
+            # Query folder with aggregated document statistics
+            result = session.query(
+                Folder.id,
+                Folder.folder_name,
+                Folder.folder_path,
+                Folder.status,
+                func.count(Document.id).label('total_documents'),
+                func.count(func.case([(Document.valid == 'Y', 1)])).label('valid_documents'),
+                func.count(func.case([(Document.valid == 'N', 1)])).label('invalid_documents'),
+                func.coalesce(func.sum(Doc.file_size), 0).label('total_size')
+            ).outerjoin(Document, Folder.id == Document.folder_id)\
+             .outerjoin(Doc, Document.id == Doc.document_id)\
+             .filter(Folder.id == folder_id)\
+             .group_by(Folder.id, Folder.folder_name, Folder.folder_path, Folder.status)\
+             .first()
 
-            result = cursor.fetchone()
             if result:
                 return {
                     'folder_id': result[0],
                     'folder_name': result[1],
                     'folder_path': result[2],
                     'status': result[3],
-                    'total_documents': result[4],
-                    'valid_documents': result[5],
-                    'invalid_documents': result[6],
-                    'total_size': result[7]
+                    'total_files': result[4],
+                    'valid_files': result[5],
+                    'invalid_files': result[6],
+                    'total_size': result[7],
+                    'processed_files': result[4]  # For compatibility during processing
                 }
             return None
 
@@ -283,5 +376,4 @@ class FolderPreprocessingService:
             logger.error(f"Error getting folder status: {e}")
             return None
         finally:
-            if conn:
-                conn.close()
+            session.close()

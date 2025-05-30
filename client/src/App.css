@@ -1,7 +1,7 @@
 #root {
   width: 100%;
   margin: 0;
-  padding: 1rem;
+  padding: 0;
   text-align: center;
   background-color: #f8f9fa;
   min-height: 100vh;
@@ -17,8 +17,111 @@
   color: #212529;
   background-color: #f8f9fa;
   min-height: 100vh;
+  width: 100%;
+  padding: 0 1rem;
+  box-sizing: border-box;
   /* Ensure default text color is visible */
 }
+
+/* Remove padding for batch management to allow full width */
+.App.full-width {
+  padding: 0;
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  overflow: hidden;
+  position: fixed;
+  top: 0;
+  left: 0;
+  background-color: #f8f9fa;
+}
+
+/* Banner Styles */
+.banner-container {
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
+  margin-right: calc(-50vw + 50%);
+  margin-top: 0;
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #004D66 0%, #006064 100%);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.banner-image {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.banner-text-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  background: rgba(0, 77, 102, 0.85);
+  color: white;
+  text-align: left;
+  padding: 20px 40px;
+}
+
+.banner-title {
+  margin: 0 0 8px 0;
+  font-size: 2.5rem;
+  font-weight: 700;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  color: #E0F7FA !important;
+  line-height: 1.2;
+}
+
+.banner-subtitle {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 400;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  color: #B2EBF2 !important;
+  opacity: 0.95;
+}
+
+/* Responsive banner text */
+@media (max-width: 768px) {
+  .banner-text-overlay {
+    padding: 15px 20px;
+  }
+
+  .banner-title {
+    font-size: 1.8rem;
+  }
+
+  .banner-subtitle {
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .banner-text-overlay {
+    padding: 10px 15px;
+  }
+
+  .banner-title {
+    font-size: 1.4rem;
+  }
+
+  .banner-subtitle {
+    font-size: 0.8rem;
+  }
+}
+
+
 
 /* Global text visibility fixes */
 .App * {
@@ -87,7 +190,7 @@
 }
 
 .button {
-  background-color: #007bff;
+  background-color: #006064;
   color: white;
   padding: 10px 15px;
   border: none;
@@ -100,11 +203,11 @@
 }
 
 .button:hover {
-  background-color: #0056b3;
+  background-color: #004D66;
 }
 
 button {
-  background-color: #28a745;
+  background-color: #00838F;
   color: white !important;
   /* Force button text to be white */
   padding: 10px 15px;
@@ -116,7 +219,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background-color: #218838;
+  background-color: #006064;
   color: white !important;
   /* Maintain white text on hover */
 }
@@ -224,13 +327,180 @@ button:disabled {
 }
 
 .tab.active {
-  background-color: #007bff;
+  background-color: #006064;
   color: white !important;
   /* Force white text on active tab */
-  border-color: #007bff;
+  border-color: #006064;
 }
 
-/* Configuration Selection Styles */
+/* Analyze Documents Layout */
+.analyze-documents-layout {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 1400px;
+  height: calc(100vh - 200px);
+  gap: 15px;
+}
+
+/* Top Pane - Batch Name */
+.top-pane {
+  background-color: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 15px;
+  width: 100%;
+}
+
+.batch-name-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.batch-name-section label {
+  font-weight: bold;
+  color: #333;
+  min-width: 120px;
+}
+
+.batch-name-section input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+/* Main Content Area */
+.main-content-area {
+  display: flex;
+  gap: 15px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Left Pane - Configuration Accordion */
+.left-pane {
+  width: 350px;
+  min-width: 350px;
+  background-color: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  overflow-y: auto;
+}
+
+/* Right Pane - Metadata and Controls */
+.right-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  min-width: 0;
+}
+
+/* Accordion Styles */
+.config-accordion {
+  display: flex;
+  flex-direction: column;
+}
+
+.accordion-item {
+  border-bottom: 1px solid #ddd;
+}
+
+.accordion-item:last-child {
+  border-bottom: none;
+}
+
+.accordion-header {
+  padding: 15px;
+  background-color: #e9ecef;
+  cursor: pointer;
+  border-bottom: 1px solid #ddd;
+  transition: background-color 0.2s;
+}
+
+.accordion-header:hover {
+  background-color: #dee2e6;
+}
+
+.accordion-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.accordion-icon {
+  font-size: 12px;
+  color: #666;
+  transition: transform 0.2s ease;
+  min-width: 12px;
+}
+
+.accordion-icon.expanded {
+  transform: rotate(0deg);
+}
+
+.accordion-icon.collapsed {
+  transform: rotate(-90deg);
+}
+
+.accordion-content {
+  padding: 0;
+  background-color: #fff;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
+/* Metadata Section */
+.metadata-section {
+  background-color: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 15px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.metadata-section label {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.metadata-section textarea {
+  flex: 1;
+  min-height: 200px;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+/* Configuration Selection Styles (Legacy - keeping for other uses) */
 .config-selection {
   display: flex;
   gap: 20px;
@@ -260,6 +530,14 @@ button:disabled {
   gap: 8px;
   max-height: 200px;
   overflow-y: auto;
+}
+
+/* Accordion specific config list styling */
+.accordion-content .config-list {
+  padding: 10px 15px;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0;
 }
 
 .config-item {
@@ -322,7 +600,7 @@ button:disabled {
   margin-top: 0;
   margin-bottom: 15px;
   color: #333;
-  border-bottom: 2px solid #007bff;
+  border-bottom: 2px solid #006064;
   padding-bottom: 5px;
 }
 
@@ -347,7 +625,7 @@ button:disabled {
 }
 
 .config-table th {
-  background-color: #007bff;
+  background-color: #006064;
   color: white;
   font-weight: 600;
 }
@@ -420,16 +698,16 @@ button:disabled {
 }
 
 .current-batch-info {
-  background: #e3f2fd;
+  background: #E0F2F1;
   padding: 15px;
   border-radius: 4px;
-  border-left: 4px solid #2196f3;
+  border-left: 4px solid #00838F;
   margin-top: 15px;
 }
 
 .current-batch-info h4 {
   margin: 0 0 10px 0;
-  color: #1976d2;
+  color: #004D66;
 }
 
 .current-batch-info p {
@@ -456,7 +734,7 @@ button:disabled {
 .folder-icon {
   font-size: 1.2em;
   margin-right: 10px;
-  color: #007bff;
+  color: #00838F;
 }
 
 .folder-details {
@@ -513,6 +791,12 @@ button:disabled {
   width: 100%;
   max-width: 1200px;
   text-align: left;
+}
+
+/* Full width for new batch management component */
+.batch-management {
+  width: 100% !important;
+  max-width: none !important;
 }
 
 .folders-section,
@@ -600,6 +884,25 @@ button:disabled {
 
   .batch-controls {
     max-width: 100%;
+  }
+
+  /* Responsive layout for Analyze Documents */
+  .main-content-area {
+    flex-direction: column;
+  }
+
+  .left-pane {
+    width: 100%;
+    min-width: auto;
+    max-height: 400px;
+  }
+
+  .right-pane {
+    width: 100%;
+  }
+
+  .metadata-section textarea {
+    min-height: 150px;
   }
 }
 

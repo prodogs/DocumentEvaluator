@@ -1258,9 +1258,10 @@ def list_llm_responses():
         status_filter = request.args.get('status', None)
 
         # Build query with joins to get full details
+        from sqlalchemy.orm import joinedload
         query = session.query(LlmResponse).options(
-            # Eagerly load related objects to avoid N+1 queries
-            session.query(LlmResponse).join(Prompt).join(LlmConfiguration, LlmResponse.llm_config_id == LlmConfiguration.id)
+            joinedload(LlmResponse.prompt),
+            joinedload(LlmResponse.llm_config)
         )
 
         if status_filter:
@@ -1303,6 +1304,9 @@ def list_llm_responses():
                 'llm_config': llm_config_info,
                 'llm_name': response.llm_name,  # Keep for backward compatibility
                 'response_time_ms': response.response_time_ms,
+                'overall_score': response.overall_score,  # Include suitability score (0-100)
+                'response_json': response.response_json,  # Include full response JSON
+                'response_text': response.response_text,  # Include response text
                 'started_processing_at': response.started_processing_at.isoformat() if response.started_processing_at else None,
                 'completed_processing_at': response.completed_processing_at.isoformat() if response.completed_processing_at else None,
                 'timestamp': response.timestamp.isoformat() if response.timestamp else None,

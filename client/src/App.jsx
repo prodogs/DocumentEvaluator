@@ -7,9 +7,10 @@ import LlmConfigManager from './components/LlmConfigManager';
 import PromptManager from './components/PromptManager';
 import FolderManager from './components/FolderManager';
 import BatchDashboard from './components/BatchDashboard';
+import BatchManagement from './components/BatchManagement';
 
-// Use environment variable for API URL, fallback to localhost:5004
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5004';
+// Use environment variable for API URL, fallback to localhost:5001
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
 console.log('🔧 API_BASE_URL configured as:', API_BASE_URL);
 
 function App() {
@@ -41,6 +42,21 @@ function App() {
   // UI state
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'process', 'config', 'folders', 'batches'
   const [showConfigModal, setShowConfigModal] = useState(false);
+
+  // Accordion state for Analyze Documents page
+  const [accordionState, setAccordionState] = useState({
+    llmConfigs: true,
+    prompts: true,
+    folders: true
+  });
+
+  // Toggle accordion sections
+  const toggleAccordion = (section) => {
+    setAccordionState(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
+  };
 
   // Load configuration data on component mount
   useEffect(() => {
@@ -78,11 +94,11 @@ function App() {
 
   const loadLlmConfigs = async () => {
     try {
-      console.log('Loading LLM configs from:', `${API_BASE_URL}/llm-configs`);
-      const response = await axios.get(`${API_BASE_URL}/llm-configs`);
+      console.log('Loading LLM configs from:', `${API_BASE_URL}/api/llm-configurations`);
+      const response = await axios.get(`${API_BASE_URL}/api/llm-configurations`);
       console.log('LLM configs response:', response.data);
       // Only show active LLM configurations
-      const activeConfigs = (response.data.llmConfigs || []).filter(config => config.active === true || config.active === 1);
+      const activeConfigs = (response.data.llm_configurations || []).filter(config => config.active === true);
       setLlmConfigs(activeConfigs);
       // Don't auto-select - let user choose for each batch
       setSelectedLlmConfigs([]);
@@ -99,7 +115,7 @@ function App() {
       const response = await axios.get(`${API_BASE_URL}/api/prompts`);
       console.log('Prompts response:', response.data);
       // Only show active prompts
-      const activePrompts = (response.data.prompts || []).filter(prompt => prompt.active === true || prompt.active === 1);
+      const activePrompts = (response.data.prompts || []).filter(prompt => prompt.active === true);
       setPrompts(activePrompts);
       // Don't auto-select - let user choose for each batch
       setSelectedPrompts([]);
@@ -116,7 +132,7 @@ function App() {
       const response = await axios.get(`${API_BASE_URL}/api/folders`);
       console.log('Folders response:', response.data);
       // Only show active folders in Analyze Documents tab
-      const activeFolders = (response.data.folders || []).filter(folder => folder.active === true || folder.active === 1);
+      const activeFolders = (response.data.folders || []).filter(folder => folder.active === true);
       console.log('Active folders filtered:', activeFolders);
       setFolders(activeFolders);
       // Don't auto-select - let user choose for each batch
@@ -467,319 +483,341 @@ function App() {
   };
 
   return (
-    <div className="App">
-      <h1>📊 Document Batch Processor</h1>
-
-      {/* Navigation Tabs */}
-      <div className="tabs">
-        <button
-          className={activeTab === 'dashboard' ? 'tab active' : 'tab'}
-          onClick={() => handleTabChange('dashboard')}
-        >
-          📊 Dashboard
-        </button>
-        <button
-          className={activeTab === 'process' ? 'tab active' : 'tab'}
-          onClick={() => handleTabChange('process')}
-        >
-          🔍 Analyze Documents
-        </button>
-        <button
-          className={activeTab === 'config' ? 'tab active' : 'tab'}
-          onClick={() => handleTabChange('config')}
-        >
-          ⚙️ Configuration
-        </button>
-        <button
-          className={activeTab === 'folders' ? 'tab active' : 'tab'}
-          onClick={() => handleTabChange('folders')}
-        >
-          📁 Folders
-        </button>
-        <button
-          className={activeTab === 'batches' ? 'tab active' : 'tab'}
-          onClick={() => handleTabChange('batches')}
-        >
-          📦 Batches
-        </button>
-      </div>
-
-      {activeTab === 'dashboard' && (
-        <BatchDashboard />
-      )}
-
-      {activeTab === 'process' && (
+    <div className={`App ${activeTab === 'batches' ? 'full-width' : ''}`}>
+      {activeTab !== 'batches' && (
         <>
-          {/* Configuration Selection */}
-          <div className="config-selection">
-            <div className="config-group">
-              <h3>LLM Configurations ({selectedLlmConfigs.length} selected)</h3>
-              <div className="config-list">
-                {llmConfigs.length === 0 ? (
-                  <div className="no-items-message">
-                    <p>⚠️ No active LLM configurations found. Please go to the <strong>⚙️ Configuration</strong> tab to add and activate LLM configurations.</p>
-                  </div>
-                ) : (
-                  llmConfigs.map(config => (
-                    <label key={config.id} className="config-item">
-                      <input
-                        type="checkbox"
-                        checked={selectedLlmConfigs.includes(config.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedLlmConfigs([...selectedLlmConfigs, config.id]);
-                          } else {
-                            setSelectedLlmConfigs(selectedLlmConfigs.filter(id => id !== config.id));
-                          }
-                        }}
-                      />
-                      {config.llm_name} ({config.provider_type})
-                    </label>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="config-group">
-              <h3>Prompts ({selectedPrompts.length} selected)</h3>
-              <div className="config-list">
-                {prompts.length === 0 ? (
-                  <div className="no-items-message">
-                    <p>⚠️ No active prompts found. Please go to the <strong>⚙️ Configuration</strong> tab to add and activate prompts.</p>
-                  </div>
-                ) : (
-                  prompts.map(prompt => (
-                    <label key={prompt.id} className="config-item">
-                      <input
-                        type="checkbox"
-                        checked={selectedPrompts.includes(prompt.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedPrompts([...selectedPrompts, prompt.id]);
-                          } else {
-                            setSelectedPrompts(selectedPrompts.filter(id => id !== prompt.id));
-                          }
-                        }}
-                      />
-                      {prompt.description || prompt.prompt_text.substring(0, 50) + '...'}
-                    </label>
-                  ))
-                )}
-              </div>
+          <div className="banner-container">
+            <img src="/banner2.png" alt="Document Batch Processor" className="banner-image" />
+            <div className="banner-text-overlay">
+              <h1 className="banner-title">Knowledge Sync</h1>
+              <p className="banner-subtitle">Creating Intelligence from Enterprise Knowledge</p>
             </div>
           </div>
 
-          <div className="config-group">
-            <h3>Folders ({selectedFolders.length} selected)</h3>
-            <div className="config-list">
-              {folders.length === 0 ? (
-                <div className="no-folders-message">
-                  <p>⚠️ No folders found. Please go to the <strong>📁 Folders</strong> tab to add folders for processing.</p>
-                </div>
-              ) : (
-                folders.map(folder => (
-                  <label key={folder.id} className="config-item">
-                    <input
-                      type="checkbox"
-                      checked={selectedFolders.includes(folder.id)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedFolders([...selectedFolders, folder.id]);
-                        } else {
-                          setSelectedFolders(selectedFolders.filter(id => id !== folder.id));
-                        }
-                      }}
-                    />
-                    <div className="folder-details">
-                      <div className="folder-name">{folder.folder_name || folder.folder_path.split('/').pop()}</div>
-                      <div className="folder-path">{folder.folder_path}</div>
-                    </div>
-                  </label>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Batch Processing Controls */}
-          <div className="batch-controls">
-            <div className="batch-input-group">
-              <label htmlFor="batch-name">Batch Name:</label>
-              <input
-                id="batch-name"
-                type="text"
-                value={batchName}
-                onChange={(e) => setBatchName(e.target.value)}
-                placeholder="Enter batch name..."
-                disabled={isProcessing}
-              />
-            </div>
-
-            <div className="batch-input-group">
-              <label htmlFor="batch-metadata">Metadata (JSON):</label>
-              <textarea
-                id="batch-metadata"
-                value={batchMetaData}
-                onChange={(e) => setBatchMetaData(e.target.value)}
-                placeholder='Optional JSON metadata for LLM context, e.g., {"project": "analysis", "version": "1.0"}'
-                disabled={isProcessing}
-                rows={5}
-              />
-              <small style={{ color: '#666', fontSize: '11px' }}>
-                This JSON will be sent to the LLM for additional context during document processing. Leave empty if not needed.
-              </small>
-            </div>
-
-            {currentBatch && (
-              <div className="current-batch-info">
-                <h4>Current Batch: {currentBatch.batch_name}</h4>
-                <p>Status: {currentBatch.status === 'P' ? 'Processing' : currentBatch.status === 'PA' ? 'Paused' : currentBatch.status === 'C' ? 'Completed' : currentBatch.status}</p>
-                <p>Created: {new Date(currentBatch.created_at).toLocaleString()}</p>
-                {currentBatch.status === 'P' && (
-                  <button
-                    onClick={() => pauseBatch(currentBatch.id)}
-                    disabled={batchActionLoading === 'pause'}
-                    className="pause-button"
-                    style={{
-                      marginRight: '10px',
-                      backgroundColor: batchActionLoading === 'pause' ? '#ccc' : '#ffc107',
-                      color: batchActionLoading === 'pause' ? '#666' : '#856404',
-                      border: 'none',
-                      padding: '5px 10px',
-                      borderRadius: '3px',
-                      cursor: batchActionLoading === 'pause' ? 'not-allowed' : 'pointer'
-                    }}
-                  >
-                    {batchActionLoading === 'pause' ? '⏳ Pausing...' : '⏸️ Pause Batch'}
-                  </button>
-                )}
-                {currentBatch.status === 'PA' && (
-                  <button
-                    onClick={() => resumeBatch(currentBatch.id)}
-                    disabled={batchActionLoading === 'resume'}
-                    className="resume-button"
-                    style={{
-                      marginRight: '10px',
-                      backgroundColor: batchActionLoading === 'resume' ? '#ccc' : '#28a745',
-                      color: batchActionLoading === 'resume' ? '#666' : 'white',
-                      border: 'none',
-                      padding: '5px 10px',
-                      borderRadius: '3px',
-                      cursor: batchActionLoading === 'resume' ? 'not-allowed' : 'pointer'
-                    }}
-                  >
-                    {batchActionLoading === 'resume' ? '⏳ Resuming...' : '▶️ Resume Batch'}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="controls">
+          {/* Navigation Tabs */}
+          <div className="tabs">
             <button
-              onClick={startFolderProcessing}
-              disabled={isProcessing || selectedLlmConfigs.length === 0 || selectedPrompts.length === 0 || selectedFolders.length === 0 || !batchName.trim()}
+              className={activeTab === 'dashboard' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('dashboard')}
             >
-              Start Document Analysis
+              📊 Dashboard
             </button>
-            <button onClick={stopProcessing} disabled={!isProcessing}>
-              Stop Processing
+            <button
+              className={activeTab === 'process' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('process')}
+            >
+              🔍 Analyze Documents
             </button>
-            <button onClick={handleShowErrors} disabled={errors.length === 0}>
-              Errors ({errors.length})
+            <button
+              className={activeTab === 'config' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('config')}
+            >
+              ⚙️ Configuration
+            </button>
+            <button
+              className={activeTab === 'folders' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('folders')}
+            >
+              📁 Folders
+            </button>
+            <button
+              className={activeTab === 'batches' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('batches')}
+            >
+              📦 Batches
             </button>
           </div>
+
+          {activeTab === 'dashboard' && (
+            <BatchDashboard />
+          )}
+
+          {activeTab === 'process' && (
+            <div className="analyze-documents-layout">
+              {/* Top Pane - Batch Name */}
+              <div className="top-pane">
+                <div className="batch-name-section">
+                  <label htmlFor="batch-name">Batch Name:</label>
+                  <input
+                    id="batch-name"
+                    type="text"
+                    value={batchName}
+                    onChange={(e) => setBatchName(e.target.value)}
+                    placeholder="Enter batch name..."
+                    disabled={isProcessing}
+                  />
+                </div>
+              </div>
+
+              {/* Main Content Area */}
+              <div className="main-content-area">
+                {/* Left Pane - Configuration Accordion */}
+                <div className="left-pane">
+                  <div className="config-accordion">
+                    {/* LLM Configurations Accordion */}
+                    <div className="accordion-item">
+                      <div className="accordion-header" onClick={() => toggleAccordion('llmConfigs')}>
+                        <h3>
+                          <span className={`accordion-icon ${accordionState.llmConfigs ? 'expanded' : 'collapsed'}`}>
+                            {accordionState.llmConfigs ? '▼' : '▶'}
+                          </span>
+                          🤖 LLM Configurations ({selectedLlmConfigs.length} selected)
+                        </h3>
+                      </div>
+                      {accordionState.llmConfigs && (
+                        <div className="accordion-content">
+                          <div className="config-list">
+                            {llmConfigs.length === 0 ? (
+                              <div className="no-items-message">
+                                <p>⚠️ No active LLM configurations found. Please go to the <strong>⚙️ Configuration</strong> tab to add and activate LLM configurations.</p>
+                              </div>
+                            ) : (
+                              llmConfigs.map(config => (
+                                <label key={config.id} className="config-item">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedLlmConfigs.includes(config.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setSelectedLlmConfigs([...selectedLlmConfigs, config.id]);
+                                      } else {
+                                        setSelectedLlmConfigs(selectedLlmConfigs.filter(id => id !== config.id));
+                                      }
+                                    }}
+                                  />
+                                  {config.llm_name} ({config.provider_type})
+                                </label>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Prompts Accordion */}
+                    <div className="accordion-item">
+                      <div className="accordion-header" onClick={() => toggleAccordion('prompts')}>
+                        <h3>
+                          <span className={`accordion-icon ${accordionState.prompts ? 'expanded' : 'collapsed'}`}>
+                            {accordionState.prompts ? '▼' : '▶'}
+                          </span>
+                          📝 Prompts ({selectedPrompts.length} selected)
+                        </h3>
+                      </div>
+                      {accordionState.prompts && (
+                        <div className="accordion-content">
+                          <div className="config-list">
+                            {prompts.length === 0 ? (
+                              <div className="no-items-message">
+                                <p>⚠️ No active prompts found. Please go to the <strong>⚙️ Configuration</strong> tab to add and activate prompts.</p>
+                              </div>
+                            ) : (
+                              prompts.map(prompt => (
+                                <label key={prompt.id} className="config-item">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedPrompts.includes(prompt.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setSelectedPrompts([...selectedPrompts, prompt.id]);
+                                      } else {
+                                        setSelectedPrompts(selectedPrompts.filter(id => id !== prompt.id));
+                                      }
+                                    }}
+                                  />
+                                  {prompt.description || prompt.prompt_text.substring(0, 50) + '...'}
+                                </label>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Folders Accordion */}
+                    <div className="accordion-item">
+                      <div className="accordion-header" onClick={() => toggleAccordion('folders')}>
+                        <h3>
+                          <span className={`accordion-icon ${accordionState.folders ? 'expanded' : 'collapsed'}`}>
+                            {accordionState.folders ? '▼' : '▶'}
+                          </span>
+                          📁 Folders ({selectedFolders.length} selected)
+                        </h3>
+                      </div>
+                      {accordionState.folders && (
+                        <div className="accordion-content">
+                          <div className="config-list">
+                            {folders.length === 0 ? (
+                              <div className="no-folders-message">
+                                <p>⚠️ No folders found. Please go to the <strong>📁 Folders</strong> tab to add folders for processing.</p>
+                              </div>
+                            ) : (
+                              folders.map(folder => (
+                                <label key={folder.id} className="config-item">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedFolders.includes(folder.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setSelectedFolders([...selectedFolders, folder.id]);
+                                      } else {
+                                        setSelectedFolders(selectedFolders.filter(id => id !== folder.id));
+                                      }
+                                    }}
+                                  />
+                                  <div className="folder-details">
+                                    <div className="folder-name">{folder.folder_name || folder.folder_path.split('/').pop()}</div>
+                                    <div className="folder-path">{folder.folder_path}</div>
+                                  </div>
+                                </label>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Pane - Metadata and Controls */}
+                <div className="right-pane">
+                  <div className="metadata-section">
+                    <label htmlFor="batch-metadata">Metadata (JSON):</label>
+                    <textarea
+                      id="batch-metadata"
+                      value={batchMetaData}
+                      onChange={(e) => setBatchMetaData(e.target.value)}
+                      placeholder='Optional JSON metadata for LLM context, e.g., {"project": "analysis", "version": "1.0"}'
+                      disabled={isProcessing}
+                      rows={8}
+                    />
+                    <small style={{ color: '#666', fontSize: '11px' }}>
+                      This JSON will be sent to the LLM for additional context during document processing. Leave empty if not needed.
+                    </small>
+                  </div>
+
+                  {currentBatch && (
+                    <div className="current-batch-info">
+                      <h4>Current Batch: {currentBatch.batch_name}</h4>
+                      <p>Status: {currentBatch.status === 'P' ? 'Processing' : currentBatch.status === 'PA' ? 'Paused' : currentBatch.status === 'C' ? 'Completed' : currentBatch.status}</p>
+                      <p>Created: {new Date(currentBatch.created_at).toLocaleString()}</p>
+                      {currentBatch.status === 'P' && (
+                        <button
+                          onClick={() => pauseBatch(currentBatch.id)}
+                          disabled={batchActionLoading === 'pause'}
+                          className="pause-button"
+                          style={{
+                            marginRight: '10px',
+                            backgroundColor: batchActionLoading === 'pause' ? '#ccc' : '#ffc107',
+                            color: batchActionLoading === 'pause' ? '#666' : '#856404',
+                            border: 'none',
+                            padding: '5px 10px',
+                            borderRadius: '3px',
+                            cursor: batchActionLoading === 'pause' ? 'not-allowed' : 'pointer'
+                          }}
+                        >
+                          {batchActionLoading === 'pause' ? '⏳ Pausing...' : '⏸️ Pause Batch'}
+                        </button>
+                      )}
+                      {currentBatch.status === 'PA' && (
+                        <button
+                          onClick={() => resumeBatch(currentBatch.id)}
+                          disabled={batchActionLoading === 'resume'}
+                          className="resume-button"
+                          style={{
+                            marginRight: '10px',
+                            backgroundColor: batchActionLoading === 'resume' ? '#ccc' : '#28a745',
+                            color: batchActionLoading === 'resume' ? '#666' : 'white',
+                            border: 'none',
+                            padding: '5px 10px',
+                            borderRadius: '3px',
+                            cursor: batchActionLoading === 'resume' ? 'not-allowed' : 'pointer'
+                          }}
+                        >
+                          {batchActionLoading === 'resume' ? '⏳ Resuming...' : '▶️ Resume Batch'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="controls">
+                    <button
+                      onClick={startFolderProcessing}
+                      disabled={isProcessing || selectedLlmConfigs.length === 0 || selectedPrompts.length === 0 || selectedFolders.length === 0 || !batchName.trim()}
+                    >
+                      Start Document Analysis
+                    </button>
+                    <button onClick={stopProcessing} disabled={!isProcessing}>
+                      Stop Processing
+                    </button>
+                    <button onClick={handleShowErrors} disabled={errors.length === 0}>
+                      Errors ({errors.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'config' && (
+            <div className="config-tab">
+              <h2>Configuration Management</h2>
+
+              <div className="config-sections">
+                <div className="config-section">
+                  <LlmConfigManager onConfigsChange={setLlmConfigs} />
+                </div>
+
+                <div className="config-section">
+                  <PromptManager onPromptsChange={setPrompts} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'folders' && (
+            <div className="folders-tab">
+              <FolderManager onFoldersChange={setFolders} />
+            </div>
+          )}
+
+          {activeTab === 'process' && (
+            <div className="status">
+              <p>Status: {message}</p>
+              <p>Files Processed: {processedDocuments} / {totalDocuments}</p>
+              <p>Outstanding Tasks: {outstandingDocuments}</p>
+            </div>
+          )}
+
+          {showErrorModal && (
+            <div className="modal-overlay">
+              <div className="modal-content">
+                <h2>Processing Errors</h2>
+                {errors.length === 0 ? (
+                  <p>No errors to display.</p>
+                ) : (
+                  <ul>
+                    {errors.map((error, index) => (
+                      <li key={`error-${index}`}>
+                        <strong>File:</strong> {error.filename || 'Unknown'} <br />
+                        <strong>LLM:</strong> {error.llm_name || 'Unknown'} <br />
+                        <strong>Prompt:</strong> {error.prompt_text ? error.prompt_text.substring(0, 50) + '...' : 'Unknown'} <br />
+                        <strong>Error:</strong> {error.error_message || error} <br />
+                        <strong>Time:</strong> {error.timestamp ? new Date(error.timestamp).toLocaleString() : 'Unknown'} <br />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button onClick={handleCloseErrorModal}>Close</button>
+              </div>
+            </div>
+          )}
         </>
       )}
 
-      {activeTab === 'config' && (
-        <div className="config-tab">
-          <h2>Configuration Management</h2>
-
-          <div className="config-sections">
-            <div className="config-section">
-              <LlmConfigManager onConfigsChange={setLlmConfigs} />
-            </div>
-
-            <div className="config-section">
-              <PromptManager onPromptsChange={setPrompts} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'folders' && (
-        <div className="folders-tab">
-          <FolderManager onFoldersChange={setFolders} />
-        </div>
-      )}
-
+      {/* Batch Management - Full Screen */}
       {activeTab === 'batches' && (
-        <div className="batches-tab">
-          <h2>Batch Management</h2>
-          <div className="batches-section">
-            <h3>Recent Batches</h3>
-            <div className="batches-table">
-              {batches.length === 0 ? (
-                <p>No batches found.</p>
-              ) : (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Batch #</th>
-                      <th>Name</th>
-                      <th>Status</th>
-                      <th>Created</th>
-                      <th>Folders</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {batches.map(batch => (
-                      <tr key={batch.id}>
-                        <td>{batch.batch_number}</td>
-                        <td>{batch.batch_name}</td>
-                        <td>{batch.status}</td>
-                        <td>{new Date(batch.created_at).toLocaleString()}</td>
-                        <td>{batch.folder_ids ? JSON.parse(batch.folder_ids).length : 0} folders</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'process' && (
-        <div className="status">
-          <p>Status: {message}</p>
-          <p>Files Processed: {processedDocuments} / {totalDocuments}</p>
-          <p>Outstanding Tasks: {outstandingDocuments}</p>
-        </div>
-      )}
-
-      {showErrorModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h2>Processing Errors</h2>
-            {errors.length === 0 ? (
-              <p>No errors to display.</p>
-            ) : (
-              <ul>
-                {errors.map((error, index) => (
-                  <li key={`error-${index}`}>
-                    <strong>File:</strong> {error.filename || 'Unknown'} <br />
-                    <strong>LLM:</strong> {error.llm_name || 'Unknown'} <br />
-                    <strong>Prompt:</strong> {error.prompt_text ? error.prompt_text.substring(0, 50) + '...' : 'Unknown'} <br />
-                    <strong>Error:</strong> {error.error_message || error} <br />
-                    <strong>Time:</strong> {error.timestamp ? new Date(error.timestamp).toLocaleString() : 'Unknown'} <br />
-                  </li>
-                ))}
-              </ul>
-            )}
-            <button onClick={handleCloseErrorModal}>Close</button>
-          </div>
-        </div>
+        <BatchManagement onNavigateBack={() => setActiveTab('dashboard')} />
       )}
     </div>
   );

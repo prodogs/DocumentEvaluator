@@ -18,12 +18,12 @@ import requests
 import uuid
 import pathlib
 
-from .database import Session
-from server.models import Folder, LlmConfiguration, Prompt, LlmResponse, Document
-from server.api.document_routes import register_document_routes, background_tasks
-from server.api.process_folder import process_folder
-from server.api.status_polling import polling_service
-from server.api.run_batch import run_batch_bp
+from database import Session
+from models import Folder, LlmConfiguration, Prompt, LlmResponse, Document
+from api.document_routes import register_document_routes, background_tasks
+from api.process_folder import process_folder
+from api.status_polling import polling_service
+from api.run_batch import run_batch_bp
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -35,6 +35,26 @@ register_document_routes(app)
 
 # Register batch execution routes
 app.register_blueprint(run_batch_bp)
+
+# Register service routes - this will be done in app_launcher.py to avoid duplicate registration
+# from server.api.service_routes import service_routes
+# app.register_blueprint(service_routes)
+
+# Register folder routes - this will be done in app_launcher.py to avoid duplicate registration
+# from server.api.folder_routes import folder_routes
+# app.register_blueprint(folder_routes)
+
+# Register batch routes - this will be done in app_launcher.py to avoid duplicate registration
+# from server.api.batch_routes import register_batch_routes
+# register_batch_routes(app)
+
+# Register folder preprocessing routes
+# from server.api.folder_preprocessing_routes import folder_preprocessing_bp
+# app.register_blueprint(folder_preprocessing_bp)
+
+# Register main routes - this will be done in app_launcher.py to avoid duplicate registration
+# from server.routes import register_routes
+# register_routes(app, background_tasks)
 
 # Add route to serve the landing page
 @app.route('/')
@@ -125,13 +145,68 @@ def get_prompts():
             result['prompts'].append({
                 'id': prompt.id,
                 'prompt_text': prompt.prompt_text,
-                'description': prompt.description
+                'description': prompt.description,
+                'active': bool(prompt.active)  # Include active field as boolean
             })
 
         session.close()
         return jsonify(result)
     except Exception as e:
         print(f"Error getting prompts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/llm-configurations', methods=['GET'])
+def get_llm_configurations():
+    """Get all LLM configurations from the database"""
+    try:
+        session = Session()
+        llm_configs = session.query(LlmConfiguration).all()
+
+        result = {
+            'llm_configurations': []
+        }
+
+        for config in llm_configs:
+            result['llm_configurations'].append({
+                'id': config.id,
+                'llm_name': config.llm_name,
+                'base_url': config.base_url,
+                'model_name': config.model_name,
+                'api_key': config.api_key,
+                'provider_type': config.provider_type,
+                'port_no': config.port_no,
+                'active': bool(config.active)  # Include active field as boolean
+            })
+
+        session.close()
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error getting LLM configurations: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/folders', methods=['GET'])
+def get_folders():
+    """Get all folders from the database"""
+    try:
+        session = Session()
+        folders = session.query(Folder).all()
+
+        result = {
+            'folders': []
+        }
+
+        for folder in folders:
+            result['folders'].append({
+                'id': folder.id,
+                'folder_name': folder.folder_name,
+                'folder_path': folder.folder_path,
+                'active': bool(folder.active)  # Include active field as boolean
+            })
+
+        session.close()
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error getting folders: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/progress', methods=['GET'])
@@ -202,3 +277,122 @@ def get_errors():
     except Exception as e:
         print(f"Error getting errors: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/folders/preprocess', methods=['POST'])
+def preprocess_folder():
+    """Start folder preprocessing workflow"""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'JSON data required'}), 400
+
+        folder_path = data.get('folder_path')
+        folder_name = data.get('folder_name')
+
+        if not folder_path:
+            return jsonify({'error': 'folder_path is required'}), 400
+
+        if not folder_name:
+            return jsonify({'error': 'folder_name is required'}), 400
+
+        # Validate folder exists
+        import os
+        if not os.path.exists(folder_path):
+            return jsonify({'error': f'Folder does not exist: {folder_path}'}), 400
+
+        if not os.path.isdir(folder_path):
+            return jsonify({'error': f'Path is not a directory: {folder_path}'}), 400
+
+        # Use the actual FolderPreprocessingService
+        from services.folder_preprocessing_service import FolderPreprocessingService
+        import uuid
+        import threading
+
+        task_id = str(uuid.uuid4())
+
+        # Initialize task tracking
+        if not hasattr(app, 'preprocessing_tasks'):
+            app.preprocessing_tasks = {}
+
+        app.preprocessing_tasks[task_id] = {
+            'status': 'STARTED',
+            'folder_path': folder_path,
+            'folder_name': folder_name,
+            'progress': 0,
+            'total_files': 0,
+            'processed_files': 0,
+            'valid_files': 0,
+            'invalid_files': 0,
+            'error': None,
+            'folder_id': None
+        }
+
+        # Start preprocessing in background thread
+        def run_preprocessing():
+            try:
+                service = FolderPreprocessingService()
+                with app.app_context():
+                    result = service.preprocess_folder_async(folder_path, folder_name, task_id)
+                    app.preprocessing_tasks[task_id].update({
+                        'status': 'COMPLETED',
+                        'progress': 100,
+                        'folder_id': result.get('folder_id')
+                    })
+            except Exception as e:
+                app.preprocessing_tasks[task_id].update({
+                    'status': 'ERROR',
+                    'error': str(e)
+                })
+
+        thread = threading.Thread(target=run_preprocessing)
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'message': 'Folder preprocessing started',
+            'task_id': task_id
+        }), 202
+
+    except Exception as e:
+        print(f"Error preprocessing folder: {e}")
+        return jsonify({'error': f'Preprocessing failed: {str(e)}'}), 500
+
+@app.route('/api/folders/<int:folder_id>/status', methods=['GET'])
+def get_folder_status(folder_id):
+    """Get folder preprocessing status and statistics"""
+    try:
+        from services.folder_preprocessing_service import FolderPreprocessingService
+
+        service = FolderPreprocessingService()
+        status = service.get_folder_status(folder_id)
+
+        if not status:
+            return jsonify({'error': 'Folder not found'}), 404
+
+        return jsonify({
+            'folder_status': status
+        }), 200
+
+    except Exception as e:
+        print(f"Error getting folder status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/folders/task/<task_id>/status', methods=['GET'])
+def get_task_status(task_id):
+    """Get preprocessing task status"""
+    try:
+        # Check if task exists in our tracking
+        if not hasattr(app, 'preprocessing_tasks') or task_id not in app.preprocessing_tasks:
+            return jsonify({'error': 'Task not found'}), 404
+
+        task_info = app.preprocessing_tasks[task_id]
+
+        return jsonify(task_info), 200
+
+    except Exception as e:
+        print(f"Error getting task status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=True)
