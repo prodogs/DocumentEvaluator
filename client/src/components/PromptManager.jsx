@@ -52,6 +52,9 @@ const PromptManager = ({ onPromptsChange }) => {
       
       resetForm();
       loadPrompts();
+      if (onPromptsChange) {
+        onPromptsChange();
+      }
     } catch (error) {
       console.error('Error saving prompt:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);
@@ -80,6 +83,9 @@ const PromptManager = ({ onPromptsChange }) => {
       await axios.delete(`${API_BASE_URL}/api/prompts/${prompt.id}`);
       setMessage('Prompt deleted successfully');
       loadPrompts();
+      if (onPromptsChange) {
+        onPromptsChange();
+      }
     } catch (error) {
       console.error('Error deleting prompt:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);
@@ -95,6 +101,9 @@ const PromptManager = ({ onPromptsChange }) => {
       await axios.post(`${API_BASE_URL}/api/prompts/${prompt.id}/${endpoint}`);
       setMessage(`Prompt ${prompt.active ? 'deactivated' : 'activated'} successfully`);
       loadPrompts();
+      if (onPromptsChange) {
+        onPromptsChange();
+      }
     } catch (error) {
       console.error('Error toggling prompt:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);

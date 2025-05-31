@@ -17,6 +17,8 @@ const FolderManager = ({ onFoldersChange }) => {
   const [folderStats, setFolderStats] = useState({});
   const [pollingIntervals, setPollingIntervals] = useState({});
   const [expandedFolders, setExpandedFolders] = useState({});
+  const [failedFilesModal, setFailedFilesModal] = useState({ show: false, folderId: null, files: [] });
+  const [loadingFailedFiles, setLoadingFailedFiles] = useState(false);
 
   useEffect(() => {
     loadFolders();
@@ -41,6 +43,8 @@ const FolderManager = ({ onFoldersChange }) => {
       try {
         const response = await axios.get(`${API_BASE_URL}/api/folders/task/${taskId}/status`);
         const taskStatus = response.data;
+
+        console.log(`Polling folder ${folderId}, task ${taskId}: status=${taskStatus.status}, progress=${taskStatus.progress}`);
 
         // Update folder stats with task progress
         setFolderStats(prev => ({
@@ -70,8 +74,22 @@ const FolderManager = ({ onFoldersChange }) => {
             return newIntervals;
           });
 
-          // Refresh folders to get final status
-          setTimeout(() => loadFolders(), 1000);
+          // Update the folder status immediately to READY/ERROR
+          const finalStatus = taskStatus.status === 'COMPLETED' ? 'READY' : 'ERROR';
+          console.log(`Task completed for folder ${folderId}: setting status to ${finalStatus}`);
+
+          setFolders(prev => prev.map(f =>
+            f.id === folderId ? {
+              ...f,
+              status: finalStatus
+            } : f
+          ));
+
+          // Refresh folders to get final status from server (with longer delay to ensure server is updated)
+          setTimeout(() => {
+            console.log(`Refreshing folders after task completion for folder ${folderId}`);
+            loadFolders();
+          }, 2000);
         }
       } catch (error) {
         console.error(`Error polling task ${taskId} status:`, error);
@@ -95,6 +113,8 @@ const FolderManager = ({ onFoldersChange }) => {
       setLoading(true);
       const response = await axios.get(`${API_BASE_URL}/api/folders`);
       const folders = response.data.folders || [];
+
+      console.log('Loaded folders from server:', folders.map(f => ({ id: f.id, name: f.folder_name, status: f.status })));
 
       // Fix any folders that are active but not processed
       const invalidActiveFolders = folders.filter(folder =>
@@ -268,6 +288,30 @@ ${data.documents.slice(0, 10).map(doc =>
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleViewFailedFiles = async (folder) => {
+    try {
+      setLoadingFailedFiles(true);
+      const response = await axios.get(`${API_BASE_URL}/api/folders/${folder.id}/failed-files`);
+      const data = response.data;
+
+      setFailedFilesModal({
+        show: true,
+        folderId: folder.id,
+        folderName: folder.folder_name || folder.folder_path.split('/').pop(),
+        files: data.failed_files || []
+      });
+    } catch (error) {
+      console.error('Error loading failed files:', error);
+      setMessage(`Error loading failed files: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setLoadingFailedFiles(false);
+    }
+  };
+
+  const closeFailedFilesModal = () => {
+    setFailedFilesModal({ show: false, folderId: null, files: [] });
   };
 
   const resetForm = () => {
@@ -552,17 +596,18 @@ ${data.documents.slice(0, 10).map(doc =>
                     <div><strong>ID:</strong> {folder.id}</div>
                     <div><strong>Added:</strong> {formatDate(folder.created_at)}</div>
                     <div className="status-line">
-                      <strong>Status:</strong>
-                      <span className={`status ${folder.active ? 'active' : 'inactive'}`}>
-                        {folder.active ? 'Active' : 'Inactive'}
-                      </span>
-                      <span className={`processing-status ${folder.status || 'not-processed'}`}>
-                        {getProcessingStatusDisplay(folder.status)}
-                      </span>
+                      <div className="status-badges">
+                        <span className={`status-badge ${folder.active ? 'active' : 'inactive'}`}>
+                          {folder.active ? 'ACTIVE' : 'INACTIVE'}
+                        </span>
+                        <span className={`status-badge processing-status ${folder.status || 'not-processed'}`}>
+                          {getProcessingStatusDisplay(folder.status)}
+                        </span>
+                      </div>
                     </div>
                     <div className="folder-path-toggle">
                       <button
-                        className="btn btn-sm btn-link"
+                        className="btn btn-sm btn-outline-secondary"
                         onClick={() => setExpandedFolders(prev => ({
                           ...prev,
                           [folder.id]: !prev[folder.id]
@@ -573,6 +618,34 @@ ${data.documents.slice(0, 10).map(doc =>
                       </button>
                     </div>
                   </div>
+
+                  {/* Summary Information - Always visible for READY folders */}
+                  {folder.status === 'READY' && folderStats[folder.id] && (
+                    <div className="folder-summary">
+                      <div className="summary-compact">
+                        <span className="summary-item">
+                          <strong>{folderStats[folder.id].valid_files || 0}</strong> ready
+                        </span>
+                        <span className="summary-divider">•</span>
+                        <span className="summary-item">
+                          <strong>{folderStats[folder.id].invalid_files || 0}</strong> failed
+                        </span>
+                        {folderStats[folder.id].invalid_files > 0 && (
+                          <>
+                            <span className="summary-divider">•</span>
+                            <button
+                              onClick={() => handleViewFailedFiles(folder)}
+                              className="btn btn-sm btn-link-compact"
+                              disabled={loadingFailedFiles}
+                              title="View files that failed processing"
+                            >
+                              {loadingFailedFiles ? 'Loading...' : 'View Failed'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Collapsible details */}
                   {expandedFolders[folder.id] && (
@@ -588,24 +661,47 @@ ${data.documents.slice(0, 10).map(doc =>
                         {/* Show statistics if folder is READY */}
                         {folder.status === 'READY' && folderStats[folder.id] && (
                           <div className="folder-statistics">
+                            <div className="stats-header">
+                              <h6>📊 Processing Summary</h6>
+                            </div>
                             <div className="stats-grid">
                               <div className="stat-item">
-                                <span className="stat-label">Files:</span>
+                                <span className="stat-label">📁 Folders:</span>
+                                <span className="stat-value">{folderStats[folder.id].total_directories || 0}</span>
+                              </div>
+                              <div className="stat-item">
+                                <span className="stat-label">📄 Files:</span>
                                 <span className="stat-value">{folderStats[folder.id].total_files || 0}</span>
                               </div>
                               <div className="stat-item">
-                                <span className="stat-label">Valid:</span>
+                                <span className="stat-label">✅ Ready:</span>
                                 <span className="stat-value">{folderStats[folder.id].valid_files || 0}</span>
                               </div>
                               <div className="stat-item">
-                                <span className="stat-label">Errors:</span>
+                                <span className="stat-label">❌ Failed:</span>
                                 <span className="stat-value">{folderStats[folder.id].invalid_files || 0}</span>
                               </div>
                               <div className="stat-item">
-                                <span className="stat-label">Size:</span>
+                                <span className="stat-label">💾 Total Size:</span>
                                 <span className="stat-value">{formatFileSize(folderStats[folder.id].total_size || 0)}</span>
                               </div>
+                              <div className="stat-item">
+                                <span className="stat-label">✅ Ready Size:</span>
+                                <span className="stat-value">{formatFileSize(folderStats[folder.id].ready_files_size || 0)}</span>
+                              </div>
                             </div>
+                            {folderStats[folder.id].invalid_files > 0 && (
+                              <div className="failed-files-section">
+                                <button
+                                  onClick={() => handleViewFailedFiles(folder)}
+                                  className="btn btn-sm btn-warning"
+                                  disabled={loadingFailedFiles}
+                                  title="View files that failed processing"
+                                >
+                                  {loadingFailedFiles ? '⏳' : '🔍'} View Failed Files ({folderStats[folder.id].invalid_files})
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -639,6 +735,62 @@ ${data.documents.slice(0, 10).map(doc =>
           </div>
         )}
       </div>
+
+      {/* Failed Files Modal */}
+      {failedFilesModal.show && (
+        <div className="modal-overlay" onClick={closeFailedFilesModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h4>❌ Failed Files - {failedFilesModal.folderName}</h4>
+              <button className="modal-close" onClick={closeFailedFilesModal}>×</button>
+            </div>
+            <div className="modal-body">
+              {failedFilesModal.files.length === 0 ? (
+                <div className="no-failed-files">
+                  <p>✅ No failed files found! All files were processed successfully.</p>
+                </div>
+              ) : (
+                <div className="failed-files-list">
+                  <div className="failed-files-summary">
+                    <p><strong>Total Failed Files:</strong> {failedFilesModal.files.length}</p>
+                  </div>
+                  <div className="failed-files-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>File Name</th>
+                          <th>Path</th>
+                          <th>Size</th>
+                          <th>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {failedFilesModal.files.map((file, index) => (
+                          <tr key={index}>
+                            <td className="file-name">{file.filename}</td>
+                            <td className="file-path" title={file.relative_path}>
+                              {file.relative_path.length > 50
+                                ? `...${file.relative_path.slice(-47)}`
+                                : file.relative_path}
+                            </td>
+                            <td className="file-size">{formatFileSize(file.file_size)}</td>
+                            <td className="failure-reason">{file.validation_reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={closeFailedFilesModal}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

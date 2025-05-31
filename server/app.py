@@ -41,16 +41,16 @@ app.register_blueprint(run_batch_bp)
 # app.register_blueprint(service_routes)
 
 # Register folder routes - this will be done in app_launcher.py to avoid duplicate registration
-# from server.api.folder_routes import folder_routes
+# from api.folder_routes import folder_routes
 # app.register_blueprint(folder_routes)
 
-# Register batch routes - this will be done in app_launcher.py to avoid duplicate registration
-# from server.api.batch_routes import register_batch_routes
-# register_batch_routes(app)
-
-# Register folder preprocessing routes
-# from server.api.folder_preprocessing_routes import folder_preprocessing_bp
+# Register folder preprocessing routes - this will be done in app_launcher.py to avoid duplicate registration
+# from api.folder_preprocessing_routes import folder_preprocessing_bp
 # app.register_blueprint(folder_preprocessing_bp)
+
+# Register batch routes - this will be done in app_launcher.py to avoid duplicate registration
+# from api.batch_routes import register_batch_routes
+# register_batch_routes(app)
 
 # Register main routes - this will be done in app_launcher.py to avoid duplicate registration
 # from server.routes import register_routes
@@ -184,30 +184,7 @@ def get_llm_configurations():
         print(f"Error getting LLM configurations: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/folders', methods=['GET'])
-def get_folders():
-    """Get all folders from the database"""
-    try:
-        session = Session()
-        folders = session.query(Folder).all()
-
-        result = {
-            'folders': []
-        }
-
-        for folder in folders:
-            result['folders'].append({
-                'id': folder.id,
-                'folder_name': folder.folder_name,
-                'folder_path': folder.folder_path,
-                'active': bool(folder.active)  # Include active field as boolean
-            })
-
-        session.close()
-        return jsonify(result)
-    except Exception as e:
-        print(f"Error getting folders: {e}")
-        return jsonify({'error': str(e)}), 500
+# Removed duplicate /api/folders endpoint - now handled by service_routes.py
 
 @app.route('/api/progress', methods=['GET'])
 def get_progress():

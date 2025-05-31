@@ -198,7 +198,11 @@ const ConnectionManager = ({ onConnectionsChange }) => {
         )
       );
 
-      const response = await axios.post(`${API_BASE_URL}/api/connections/${connection.id}/test`);
+      const response = await axios.post(`${API_BASE_URL}/api/connections/${connection.id}/test`, {}, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
       setMessage(`Test ${response.data.success ? 'successful' : 'failed'}: ${response.data.message}`);
       loadConnections(); // Reload to get updated status
     } catch (error) {
@@ -213,7 +217,11 @@ const ConnectionManager = ({ onConnectionsChange }) => {
   const handleSyncModels = async (connection) => {
     try {
       setSyncingModels(connection.id);
-      const response = await axios.post(`${API_BASE_URL}/api/connections/${connection.id}/sync-models`);
+      const response = await axios.post(`${API_BASE_URL}/api/connections/${connection.id}/sync-models`, {}, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
       setMessage(`Model sync ${response.data.success ? 'successful' : 'failed'}: ${response.data.message}`);
       loadConnections(); // Reload to get updated models
     } catch (error) {

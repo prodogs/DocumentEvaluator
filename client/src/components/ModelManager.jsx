@@ -6,26 +6,24 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001
 
 const ModelManager = ({ onDataChange }) => {
   const [models, setModels] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
-  const [showForm, setShowForm] = useState(false);
+  const [showEditForm, setShowEditForm] = useState(false);
   const [editingModel, setEditingModel] = useState(null);
   const [expandedModels, setExpandedModels] = useState({});
-  const [modelFamilies, setModelFamilies] = useState([]);
+  const [discoveringModels, setDiscoveringModels] = useState(false);
+  const [selectedProviders, setSelectedProviders] = useState([]);
 
   const [formData, setFormData] = useState({
-    common_name: '',
     display_name: '',
     notes: '',
-    model_family: 'Other',
-    parameter_count: '',
-    context_length: '',
     is_globally_active: true
   });
 
   useEffect(() => {
     loadModels();
-    loadModelFamilies();
+    loadProviders();
   }, []);
 
   const loadModels = async () => {
@@ -43,14 +41,14 @@ const ModelManager = ({ onDataChange }) => {
     }
   };
 
-  const loadModelFamilies = async () => {
+  const loadProviders = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/models/families`);
+      const response = await axios.get(`${API_BASE_URL}/api/llm-providers`);
       if (response.data.success) {
-        setModelFamilies(response.data.families);
+        setProviders(response.data.providers);
       }
     } catch (error) {
-      console.error('Error loading model families:', error);
+      console.error('Error loading providers:', error);
     }
   };
 
@@ -62,31 +60,64 @@ const ModelManager = ({ onDataChange }) => {
     }));
   };
 
-  const handleSubmit = async (e) => {
+  const handleDiscoverModels = async () => {
+    if (selectedProviders.length === 0) {
+      setMessage('❌ Please select at least one provider to discover models from');
+      return;
+    }
+
+    setDiscoveringModels(true);
+    setMessage('🔍 Discovering models from selected providers...');
+
+    try {
+      let totalDiscovered = 0;
+
+      for (const providerId of selectedProviders) {
+        const provider = providers.find(p => p.id === providerId);
+        if (!provider) continue;
+
+        try {
+          // Get default config for the provider
+          const configResponse = await axios.get(`${API_BASE_URL}/api/llm-providers/${providerId}/default-config`);
+          const defaultConfig = configResponse.data.default_config;
+
+          // Discover models
+          const response = await axios.post(`${API_BASE_URL}/api/llm-providers/${providerId}/discover-models`, defaultConfig);
+
+          if (response.data.success) {
+            totalDiscovered += response.data.count;
+          }
+        } catch (error) {
+          console.error(`Error discovering models for ${provider.name}:`, error);
+        }
+      }
+
+      setMessage(`✅ Discovered ${totalDiscovered} models from ${selectedProviders.length} provider(s)`);
+      loadModels();
+      if (onDataChange) onDataChange();
+    } catch (error) {
+      console.error('Error discovering models:', error);
+      setMessage(`❌ Error discovering models: ${error.message}`);
+    } finally {
+      setDiscoveringModels(false);
+    }
+  };
+
+  const handleUpdateModel = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const url = editingModel 
-        ? `${API_BASE_URL}/api/models/${editingModel.id}`
-        : `${API_BASE_URL}/api/models`;
-      
-      const method = editingModel ? 'PUT' : 'POST';
-      
-      const response = await axios({
-        method,
-        url,
-        data: formData
-      });
+      const response = await axios.put(`${API_BASE_URL}/api/models/${editingModel.id}`, formData);
 
       if (response.data.success) {
-        setMessage(`✅ Model ${editingModel ? 'updated' : 'created'} successfully`);
+        setMessage(`✅ Model updated successfully`);
         resetForm();
         loadModels();
         if (onDataChange) onDataChange();
       }
     } catch (error) {
-      console.error('Error saving model:', error);
+      console.error('Error updating model:', error);
       setMessage(`❌ Error: ${error.response?.data?.error || error.message}`);
     } finally {
       setLoading(false);
@@ -96,15 +127,11 @@ const ModelManager = ({ onDataChange }) => {
   const handleEdit = (model) => {
     setEditingModel(model);
     setFormData({
-      common_name: model.common_name,
       display_name: model.display_name,
       notes: model.notes || '',
-      model_family: model.model_family || 'Other',
-      parameter_count: model.parameter_count || '',
-      context_length: model.context_length || '',
       is_globally_active: model.is_globally_active
     });
-    setShowForm(true);
+    setShowEditForm(true);
   };
 
   const handleDelete = async (model) => {
@@ -151,16 +178,12 @@ const ModelManager = ({ onDataChange }) => {
 
   const resetForm = () => {
     setFormData({
-      common_name: '',
       display_name: '',
       notes: '',
-      model_family: 'Other',
-      parameter_count: '',
-      context_length: '',
       is_globally_active: true
     });
     setEditingModel(null);
-    setShowForm(false);
+    setShowEditForm(false);
   };
 
   const getModelFamilyIcon = (family) => {
@@ -181,47 +204,70 @@ const ModelManager = ({ onDataChange }) => {
     <div className="management-container">
       <div className="management-header">
         <h2>Model Management</h2>
-        <p>Manage AI models independently from service providers. Models can be offered by multiple providers.</p>
-        
+        <p>Models are automatically discovered from configured providers. You can customize display names and manage model settings.</p>
+
         {message && (
           <div className={`message ${message.includes('❌') ? 'error' : 'success'}`}>
             {message}
           </div>
         )}
 
-        <div className="header-actions">
-          <button 
-            onClick={() => setShowForm(!showForm)} 
-            className="btn btn-primary"
-            disabled={loading}
-          >
-            {showForm ? 'Cancel' : 'Add Model'}
-          </button>
+        <div className="discovery-section">
+          <h3>Discover Models from Providers</h3>
+          <div className="provider-selection">
+            <div className="provider-checkboxes">
+              {providers.map(provider => (
+                <label key={provider.id} className="provider-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={selectedProviders.includes(provider.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedProviders(prev => [...prev, provider.id]);
+                      } else {
+                        setSelectedProviders(prev => prev.filter(id => id !== provider.id));
+                      }
+                    }}
+                    disabled={discoveringModels || !provider.supports_model_discovery}
+                  />
+                  <span className={`provider-name ${!provider.supports_model_discovery ? 'disabled' : ''}`}>
+                    {provider.name}
+                    {!provider.supports_model_discovery && ' (No Discovery)'}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <button
+              onClick={handleDiscoverModels}
+              className="btn btn-primary"
+              disabled={discoveringModels || selectedProviders.length === 0}
+            >
+              {discoveringModels ? '🔍 Discovering...' : '🔍 Discover Models'}
+            </button>
+          </div>
         </div>
       </div>
 
-      {showForm && (
+      {showEditForm && editingModel && (
         <div className="form-container">
-          <h3>{editingModel ? 'Edit Model' : 'Add New Model'}</h3>
-          <form onSubmit={handleSubmit} className="management-form">
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="common_name">Common Name *</label>
-                <input
-                  type="text"
-                  id="common_name"
-                  name="common_name"
-                  value={formData.common_name}
-                  onChange={handleInputChange}
-                  disabled={loading || editingModel}
-                  placeholder="e.g., gpt-4, claude-3-opus, llama-2-7b"
-                  required
-                />
-                {editingModel && (
-                  <small>Common name cannot be changed after creation</small>
-                )}
-              </div>
+          <h3>Edit Model: {editingModel.common_name}</h3>
+          <div className="model-info">
+            <div className="info-row">
+              <strong>Common Name:</strong> {editingModel.common_name} <small>(Auto-generated, cannot be changed)</small>
+            </div>
+            <div className="info-row">
+              <strong>Model Family:</strong> {editingModel.model_family || 'Unknown'} <small>(Auto-detected from provider)</small>
+            </div>
+            <div className="info-row">
+              <strong>Parameter Count:</strong> {editingModel.parameter_count || 'Unknown'} <small>(Auto-detected from provider)</small>
+            </div>
+            <div className="info-row">
+              <strong>Context Length:</strong> {editingModel.context_length ? `${editingModel.context_length.toLocaleString()} tokens` : 'Unknown'} <small>(Auto-detected from provider)</small>
+            </div>
+          </div>
 
+          <form onSubmit={handleUpdateModel} className="management-form">
+            <div className="form-row">
               <div className="form-group">
                 <label htmlFor="display_name">Display Name *</label>
                 <input
@@ -234,49 +280,7 @@ const ModelManager = ({ onDataChange }) => {
                   placeholder="e.g., GPT-4, Claude 3 Opus, LLaMA 2 7B"
                   required
                 />
-              </div>
-            </div>
-
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="model_family">Model Family</label>
-                <select
-                  id="model_family"
-                  name="model_family"
-                  value={formData.model_family}
-                  onChange={handleInputChange}
-                  disabled={loading}
-                >
-                  {modelFamilies.map(family => (
-                    <option key={family} value={family}>{family}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="parameter_count">Parameter Count</label>
-                <input
-                  type="text"
-                  id="parameter_count"
-                  name="parameter_count"
-                  value={formData.parameter_count}
-                  onChange={handleInputChange}
-                  disabled={loading}
-                  placeholder="e.g., 7B, 13B, 70B"
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="context_length">Context Length</label>
-                <input
-                  type="number"
-                  id="context_length"
-                  name="context_length"
-                  value={formData.context_length}
-                  onChange={handleInputChange}
-                  disabled={loading}
-                  placeholder="e.g., 4096, 8192, 32768"
-                />
+                <small>Customize how this model appears in the interface</small>
               </div>
             </div>
 
@@ -313,7 +317,7 @@ const ModelManager = ({ onDataChange }) => {
 
             <div className="form-actions">
               <button type="submit" className="btn btn-primary" disabled={loading}>
-                {loading ? 'Saving...' : (editingModel ? 'Update Model' : 'Create Model')}
+                {loading ? 'Updating...' : 'Update Model'}
               </button>
               <button type="button" onClick={resetForm} className="btn btn-secondary" disabled={loading}>
                 Cancel
@@ -324,12 +328,16 @@ const ModelManager = ({ onDataChange }) => {
       )}
 
       <div className="models-list">
-        <h4>Existing Models ({models.length})</h4>
-        
+        <h4>Discovered Models ({models.length})</h4>
+        <p>Models automatically discovered from configured providers. Click "Edit" to customize display names.</p>
+
         {loading ? (
           <div className="loading">Loading models...</div>
         ) : models.length === 0 ? (
-          <div className="no-data">No models found. Add one to get started.</div>
+          <div className="no-data">
+            <p>No models discovered yet.</p>
+            <p>Use the "Discover Models" section above to find models from your configured providers.</p>
+          </div>
         ) : (
           <div className="models-grid">
             {models.map(model => {
@@ -384,14 +392,15 @@ const ModelManager = ({ onDataChange }) => {
                   </div>
 
                   <div className="model-details">
-                    <div><strong>Family:</strong> {model.model_family}</div>
+                    <div><strong>Common Name:</strong> <code>{model.common_name}</code> <small>(Auto-generated)</small></div>
+                    <div><strong>Family:</strong> {model.model_family || 'Unknown'} <small>(Auto-detected)</small></div>
                     {model.parameter_count && (
-                      <div><strong>Parameters:</strong> {model.parameter_count}</div>
+                      <div><strong>Parameters:</strong> {model.parameter_count} <small>(Auto-detected)</small></div>
                     )}
                     {model.context_length && (
-                      <div><strong>Context:</strong> {model.context_length.toLocaleString()} tokens</div>
+                      <div><strong>Context:</strong> {model.context_length.toLocaleString()} tokens <small>(Auto-detected)</small></div>
                     )}
-                    <div><strong>Providers:</strong> {activeProviders}/{totalProviders} active</div>
+                    <div><strong>Discovered by:</strong> {totalProviders} provider{totalProviders !== 1 ? 's' : ''} ({activeProviders} active)</div>
                     <div><strong>Status:</strong>
                       <span className={`status ${model.is_globally_active ? 'active' : 'inactive'}`}>
                         {model.is_globally_active ? 'Active' : 'Inactive'}

@@ -18,7 +18,7 @@ import base64
 
 from database import Session
 from models import Folder, Document, Doc
-from sqlalchemy import text
+from sqlalchemy import text, case
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +40,7 @@ class FolderPreprocessingService:
     def __init__(self):
         self.session = None
 
-    def preprocess_folder_async(self, folder_path: str, folder_name: str, task_id: str) -> Dict:
+    def preprocess_folder_async(self, folder_path: str, folder_name: str, task_id: str, app=None) -> Dict:
         """
         Preprocess a folder asynchronously with progress updates
 
@@ -48,17 +48,16 @@ class FolderPreprocessingService:
             folder_path: Path to the folder to preprocess
             folder_name: User-provided name for the folder
             task_id: Task ID for progress tracking
+            app: Flask app instance for context (optional)
 
         Returns:
             Dict with processing results
         """
         try:
-            from flask import current_app
-
             # Update task status
             def update_task_status(**kwargs):
-                if hasattr(current_app, 'preprocessing_tasks') and task_id in current_app.preprocessing_tasks:
-                    current_app.preprocessing_tasks[task_id].update(kwargs)
+                if app and hasattr(app, 'preprocessing_tasks') and task_id in app.preprocessing_tasks:
+                    app.preprocessing_tasks[task_id].update(kwargs)
 
             # 1. Connect to database
             self.session = Session()
@@ -75,8 +74,8 @@ class FolderPreprocessingService:
             logger.info(f"🔄 Starting preprocessing for folder: {folder_name} (ID: {folder_id})")
 
             # 3. Scan all files in folder
-            files_info = self._scan_folder_files(folder_path)
-            logger.info(f"📁 Found {len(files_info)} files in folder")
+            files_info, directory_count = self._scan_folder_files(folder_path)
+            logger.info(f"📁 Found {len(files_info)} files and {directory_count} directories in folder")
 
             update_task_status(total_files=len(files_info), status='PROCESSING_FILES')
 
@@ -85,6 +84,7 @@ class FolderPreprocessingService:
                 'folder_id': folder_id,
                 'folder_name': folder_name,
                 'total_files': len(files_info),
+                'total_directories': directory_count,
                 'valid_files': 0,
                 'invalid_files': 0,
                 'total_size': 0,
@@ -155,14 +155,15 @@ class FolderPreprocessingService:
             logger.info(f"🔄 Starting preprocessing for folder: {folder_name} (ID: {folder_id})")
 
             # 3. Scan all files in folder
-            files_info = self._scan_folder_files(folder_path)
-            logger.info(f"📁 Found {len(files_info)} files in folder")
+            files_info, directory_count = self._scan_folder_files(folder_path)
+            logger.info(f"📁 Found {len(files_info)} files and {directory_count} directories in folder")
 
             # 4. Process each file
             results = {
                 'folder_id': folder_id,
                 'folder_name': folder_name,
                 'total_files': len(files_info),
+                'total_directories': directory_count,
                 'valid_files': 0,
                 'invalid_files': 0,
                 'total_size': 0,
@@ -236,27 +237,36 @@ class FolderPreprocessingService:
             folder.status = status
             self.session.flush()
 
-    def _scan_folder_files(self, folder_path: str) -> List[Dict]:
-        """Scan folder and return list of all files with metadata"""
+    def _scan_folder_files(self, folder_path: str) -> Tuple[List[Dict], int]:
+        """Scan folder and return list of all files with metadata and directory count"""
         files_info = []
+        directories = set()
         folder_path = Path(folder_path)
 
-        for file_path in folder_path.rglob('*'):
-            if file_path.is_file():
+        for item_path in folder_path.rglob('*'):
+            if item_path.is_file():
                 try:
-                    stat = file_path.stat()
+                    stat = item_path.stat()
                     files_info.append({
-                        'path': str(file_path),
-                        'relative_path': str(file_path.relative_to(folder_path)),
-                        'name': file_path.name,
+                        'path': str(item_path),
+                        'relative_path': str(item_path.relative_to(folder_path)),
+                        'name': item_path.name,
                         'size': stat.st_size,
-                        'extension': file_path.suffix.lower(),
-                        'mime_type': mimetypes.guess_type(str(file_path))[0] or 'application/octet-stream'
+                        'extension': item_path.suffix.lower(),
+                        'mime_type': mimetypes.guess_type(str(item_path))[0] or 'application/octet-stream'
                     })
                 except Exception as e:
-                    logger.warning(f"Could not get info for file {file_path}: {e}")
+                    logger.warning(f"Could not get info for file {item_path}: {e}")
+            elif item_path.is_dir():
+                # Count unique directories (excluding the root folder itself)
+                try:
+                    relative_dir = str(item_path.relative_to(folder_path))
+                    if relative_dir != '.':  # Exclude the root folder
+                        directories.add(relative_dir)
+                except Exception as e:
+                    logger.warning(f"Could not get relative path for directory {item_path}: {e}")
 
-        return files_info
+        return files_info, len(directories)
 
     def _validate_file(self, file_info: Dict) -> Tuple[bool, str]:
         """
@@ -293,12 +303,21 @@ class FolderPreprocessingService:
         is_valid, validation_reason = self._validate_file(file_info)
         valid_flag = 'Y' if is_valid else 'N'
 
-        # 2. Create document record
+        # 2. Prepare metadata with validation information
+        meta_data = {
+            'validation_reason': validation_reason,
+            'file_size': file_info['size'],
+            'file_extension': file_info['extension'],
+            'relative_path': file_info['relative_path']
+        }
+
+        # 3. Create document record
         document = Document(
             folder_id=folder_id,
             filepath=file_info['path'],
             filename=file_info['name'],
-            valid=valid_flag
+            valid=valid_flag,
+            meta_data=meta_data
         )
         self.session.add(document)
         self.session.flush()  # Get the ID without committing
@@ -349,9 +368,10 @@ class FolderPreprocessingService:
                 Folder.folder_path,
                 Folder.status,
                 func.count(Document.id).label('total_documents'),
-                func.count(func.case([(Document.valid == 'Y', 1)])).label('valid_documents'),
-                func.count(func.case([(Document.valid == 'N', 1)])).label('invalid_documents'),
-                func.coalesce(func.sum(Doc.file_size), 0).label('total_size')
+                func.sum(case((Document.valid == 'Y', 1), else_=0)).label('valid_documents'),
+                func.sum(case((Document.valid == 'N', 1), else_=0)).label('invalid_documents'),
+                func.coalesce(func.sum(Doc.file_size), 0).label('total_size'),
+                func.coalesce(func.sum(case((Document.valid == 'Y', Doc.file_size), else_=0)), 0).label('ready_files_size')
             ).outerjoin(Document, Folder.id == Document.folder_id)\
              .outerjoin(Doc, Document.id == Doc.document_id)\
              .filter(Folder.id == folder_id)\
@@ -359,6 +379,15 @@ class FolderPreprocessingService:
              .first()
 
             if result:
+                # Get directory count by scanning the folder if it exists
+                directory_count = 0
+                folder_path = result[2]  # folder_path
+                if folder_path and os.path.exists(folder_path):
+                    try:
+                        _, directory_count = self._scan_folder_files(folder_path)
+                    except Exception as e:
+                        logger.warning(f"Could not scan directory count for folder {folder_path}: {e}")
+
                 return {
                     'folder_id': result[0],
                     'folder_name': result[1],
@@ -368,6 +397,8 @@ class FolderPreprocessingService:
                     'valid_files': result[5],
                     'invalid_files': result[6],
                     'total_size': result[7],
+                    'ready_files_size': result[8],
+                    'total_directories': directory_count,
                     'processed_files': result[4]  # For compatibility during processing
                 }
             return None

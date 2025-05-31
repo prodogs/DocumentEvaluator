@@ -7,6 +7,37 @@ from models import Folder
 
 folder_routes = Blueprint('folder_routes', __name__)
 
+@folder_routes.route('/api/folders', methods=['GET'])
+def list_folders():
+    """List all folders with their active status"""
+    try:
+        session = Session()
+        folders = session.query(Folder).all()
+
+        folder_list = []
+        for folder in folders:
+            folder_list.append({
+                'id': folder.id,
+                'folder_path': folder.folder_path,
+                'folder_name': folder.folder_name,
+                'active': bool(folder.active),
+                'status': getattr(folder, 'status', 'NOT_PROCESSED'),  # Include preprocessing status
+                'created_at': folder.created_at.isoformat() if folder.created_at else None
+            })
+
+        session.close()
+
+        return jsonify({
+            'folders': folder_list,
+            'total': len(folder_list),
+            'active_count': len([f for f in folder_list if f['active']])
+        }), 200
+
+    except Exception as e:
+        if 'session' in locals():
+            session.close()
+        return jsonify({'error': str(e)}), 500
+
 @folder_routes.route('/api/folders', methods=['POST'])
 def add_folder():
     """Add a new folder to the database."""

@@ -61,6 +61,9 @@ const LlmConfigManager = ({ onConfigsChange }) => {
 
       resetForm();
       loadConfigs();
+      if (onConfigsChange) {
+        onConfigsChange();
+      }
     } catch (error) {
       console.error('Error saving configuration:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);
@@ -93,6 +96,9 @@ const LlmConfigManager = ({ onConfigsChange }) => {
       await axios.delete(`${API_BASE_URL}/api/llm-configurations/${config.id}`);
       setMessage('Configuration deleted successfully');
       loadConfigs();
+      if (onConfigsChange) {
+        onConfigsChange();
+      }
     } catch (error) {
       console.error('Error deleting configuration:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);
@@ -108,6 +114,9 @@ const LlmConfigManager = ({ onConfigsChange }) => {
       await axios.post(`${API_BASE_URL}/api/llm-configurations/${config.id}/${endpoint}`);
       setMessage(`Configuration ${config.active ? 'deactivated' : 'activated'} successfully`);
       loadConfigs();
+      if (onConfigsChange) {
+        onConfigsChange();
+      }
     } catch (error) {
       console.error('Error toggling configuration:', error);
       setMessage(`Error: ${error.response?.data?.error || error.message}`);

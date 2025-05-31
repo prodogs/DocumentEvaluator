@@ -859,3 +859,141 @@
     font-size: 0.9rem;
   }
 }
+
+/* Discovery Section Styles */
+.discovery-section {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 2rem 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.discovery-section h3 {
+  margin: 0 0 1.5rem 0;
+  color: #495057;
+  font-size: 1.3rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.discovery-section h3::before {
+  content: '🔍';
+  font-size: 1.5rem;
+}
+
+.provider-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.provider-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.provider-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  border: 2px solid #dee2e6;
+  border-radius: 8px;
+  background: white;
+  transition: all 0.3s ease;
+  min-width: 200px;
+}
+
+.provider-checkbox:hover {
+  background: #f8f9fa;
+  border-color: #667eea;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.provider-checkbox input[type="checkbox"] {
+  margin: 0;
+  transform: scale(1.2);
+  accent-color: #667eea;
+}
+
+.provider-name {
+  font-weight: 500;
+  color: #495057;
+}
+
+.provider-name.disabled {
+  color: #6c757d;
+  font-style: italic;
+}
+
+/* Model Info Section */
+.model-info {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.info-row {
+  margin-bottom: 0.75rem;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.info-row:last-child {
+  margin-bottom: 0;
+}
+
+.info-row strong {
+  color: #495057;
+  min-width: 140px;
+}
+
+.info-row small {
+  color: #6c757d;
+  font-style: italic;
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.info-row code {
+  background: #e9ecef;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  font-size: 0.9em;
+  color: #495057;
+  border: 1px solid #dee2e6;
+}
+
+/* Enhanced Model Cards */
+.tab-content .model-details div {
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.tab-content .model-details small {
+  color: #6c757d;
+  font-style: italic;
+  font-size: 0.8rem;
+}
+
+.tab-content .model-details code {
+  background: #f8f9fa;
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  font-size: 0.85em;
+  border: 1px solid #e9ecef;
+}

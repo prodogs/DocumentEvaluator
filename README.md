@@ -51,7 +51,7 @@ pip install -r requirements.txt
 2. Configure database connection (PostgreSQL):
 
 ```bash
-# Database: tablemini.local:5432/doc_eval
+# Database: studio.local:5432/doc_eval
 # User: postgres
 # Password: prodogs03
 ```

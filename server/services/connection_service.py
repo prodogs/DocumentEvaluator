@@ -124,7 +124,7 @@ class ConnectionService:
                 ) VALUES (
                     :name, :description, :provider_id, :model_id, :base_url, :api_key, :port_no,
                     :connection_config, :is_active, :supports_model_discovery, :notes,
-                    'unknown', datetime('now'), datetime('now')
+                    'unknown', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
             """), {
                 "name": connection_data['name'],
@@ -168,17 +168,30 @@ class ConnectionService:
             if not connection:
                 return None
             
-            # Update fields
+            # Update connection fields using SQL to avoid datetime issues
+            update_fields = []
+            update_params = {"connection_id": connection_id}
+
             for field in ['name', 'description', 'model_id', 'base_url', 'api_key', 'port_no', 'is_active',
                          'supports_model_discovery', 'notes']:
                 if field in connection_data:
-                    setattr(connection, field, connection_data[field])
-            
+                    update_fields.append(f"{field} = :{field}")
+                    update_params[field] = connection_data[field]
+
             if 'connection_config' in connection_data:
-                connection.connection_config = json.dumps(connection_data['connection_config'])
-            
-            connection.updated_at = datetime.utcnow()
-            session.commit()
+                update_fields.append("connection_config = :connection_config")
+                update_params['connection_config'] = json.dumps(connection_data['connection_config'])
+
+            # Always update the updated_at timestamp
+            update_fields.append("updated_at = CURRENT_TIMESTAMP")
+
+            if update_fields:
+                session.execute(text(f"""
+                    UPDATE connections
+                    SET {', '.join(update_fields)}
+                    WHERE id = :connection_id
+                """), update_params)
+                session.commit()
 
             logger.info(f"Updated connection: {connection.name}")
 
@@ -258,12 +271,11 @@ class ConnectionService:
             session.execute(text("""
                 UPDATE connections
                 SET connection_status = :status,
-                    last_tested = :last_tested,
+                    last_tested = CURRENT_TIMESTAMP,
                     last_test_result = :result
                 WHERE id = :connection_id
             """), {
                 "status": 'connected' if success else 'failed',
-                "last_tested": datetime.utcnow(),
                 "result": message,
                 "connection_id": connection_id
             })
@@ -308,11 +320,10 @@ class ConnectionService:
                 session.execute(text("""
                     UPDATE connections
                     SET available_models = :models,
-                        last_model_sync = :sync_time
+                        last_model_sync = CURRENT_TIMESTAMP
                     WHERE id = :connection_id
                 """), {
                     "models": json.dumps([model['model_name'] for model in models]),
-                    "sync_time": datetime.utcnow(),
                     "connection_id": connection_id
                 })
                 session.commit()

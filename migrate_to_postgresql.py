@@ -27,7 +27,7 @@ sys.path.append('.')
 
 # PostgreSQL connection parameters
 PG_CONFIG = {
-    'host': 'tablemini.local',
+    'host': 'studio.local',
     'user': 'postgres',
     'password': 'prodogs03',
     'database': 'doc_eval',

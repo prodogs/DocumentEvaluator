@@ -217,7 +217,7 @@ function App() {
     }
 
     if (prompts.length === 0) {
-      alert('No active prompts available. Please go to the Configuration tab to add and activate prompts.');
+      alert('No active prompts available. Please go to the Prompts tab to add and activate prompts.');
       return;
     }
 
@@ -521,7 +521,7 @@ function App() {
               className={activeTab === 'config' ? 'tab active' : 'tab'}
               onClick={() => handleTabChange('config')}
             >
-              ⚙️ Configuration
+              📝 Prompts
             </button>
             <button
               className={activeTab === 'models' ? 'tab active' : 'tab'}

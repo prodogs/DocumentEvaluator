@@ -13,7 +13,7 @@ import os
 from services.folder_preprocessing_service import FolderPreprocessingService
 from database import Session
 from models import Folder, Document, Doc
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 folder_preprocessing_bp = Blueprint('folder_preprocessing', __name__)
 logger = logging.getLogger(__name__)
@@ -78,23 +78,28 @@ def preprocess_folder():
 
         # Start preprocessing in background thread
         def background_preprocessing():
-            try:
-                preprocessing_service = FolderPreprocessingService()
-                results = preprocessing_service.preprocess_folder_async(folder_path, folder_name, task_id)
+            # Get the current Flask app instance
+            app = current_app._get_current_object()
 
-                # Update final status
-                current_app.preprocessing_tasks[task_id].update({
-                    'status': 'COMPLETED',
-                    'progress': 100,
-                    'results': results
-                })
+            # Run within application context
+            with app.app_context():
+                try:
+                    preprocessing_service = FolderPreprocessingService()
+                    results = preprocessing_service.preprocess_folder_async(folder_path, folder_name, task_id, app)
 
-            except Exception as e:
-                logger.error(f"Background preprocessing failed: {e}")
-                current_app.preprocessing_tasks[task_id].update({
-                    'status': 'ERROR',
-                    'error': str(e)
-                })
+                    # Update final status
+                    app.preprocessing_tasks[task_id].update({
+                        'status': 'COMPLETED',
+                        'progress': 100,
+                        'results': results
+                    })
+
+                except Exception as e:
+                    logger.error(f"Background preprocessing failed: {e}")
+                    app.preprocessing_tasks[task_id].update({
+                        'status': 'ERROR',
+                        'error': str(e)
+                    })
 
         thread = threading.Thread(target=background_preprocessing)
         thread.daemon = True
@@ -148,6 +153,43 @@ def get_folder_status(folder_id):
         logger.error(f"Error getting folder status: {e}")
         return jsonify({'error': str(e)}), 500
 
+@folder_preprocessing_bp.route('/api/folders/<int:folder_id>/failed-files', methods=['GET'])
+def get_failed_files(folder_id):
+    """Get all failed files for a folder with their failure reasons"""
+    session = Session()
+    try:
+        # Query failed documents with their metadata
+        failed_documents = session.query(Document).filter(
+            Document.folder_id == folder_id,
+            Document.valid == 'N'
+        ).all()
+
+        failed_files = []
+        for doc in failed_documents:
+            meta_data = doc.meta_data or {}
+            failed_files.append({
+                'id': doc.id,
+                'filename': doc.filename,
+                'filepath': doc.filepath,
+                'relative_path': meta_data.get('relative_path', ''),
+                'validation_reason': meta_data.get('validation_reason', 'Unknown error'),
+                'file_size': meta_data.get('file_size', 0),
+                'file_extension': meta_data.get('file_extension', ''),
+                'created_at': doc.created_at.isoformat() if doc.created_at else None
+            })
+
+        return jsonify({
+            'failed_files': failed_files,
+            'count': len(failed_files),
+            'folder_id': folder_id
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting failed files for folder {folder_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
 @folder_preprocessing_bp.route('/api/folders/ready', methods=['GET'])
 def get_ready_folders():
     """Get all folders that are ready for batch creation"""
@@ -160,9 +202,10 @@ def get_ready_folders():
             Folder.folder_path,
             Folder.status,
             func.count(Document.id).label('total_documents'),
-            func.count(func.case([(Document.valid == 'Y', 1)])).label('valid_documents'),
-            func.count(func.case([(Document.valid == 'N', 1)])).label('invalid_documents'),
+            func.sum(case((Document.valid == 'Y', 1), else_=0)).label('valid_documents'),
+            func.sum(case((Document.valid == 'N', 1), else_=0)).label('invalid_documents'),
             func.coalesce(func.sum(Doc.file_size), 0).label('total_size'),
+            func.coalesce(func.sum(case((Document.valid == 'Y', Doc.file_size), else_=0)), 0).label('ready_files_size'),
             Folder.active
         ).outerjoin(Document, Folder.id == Document.folder_id)\
          .outerjoin(Doc, Document.id == Doc.document_id)\
@@ -182,7 +225,8 @@ def get_ready_folders():
                 'valid_documents': row[5],
                 'invalid_documents': row[6],
                 'total_size': row[7],
-                'active': bool(row[8])
+                'ready_files_size': row[8],
+                'active': bool(row[9])
             })
 
         return jsonify({

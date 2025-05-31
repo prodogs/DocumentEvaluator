@@ -5,7 +5,7 @@ STAGE 2: Execute a prepared batch
 
 import logging
 from flask import Blueprint, request, jsonify
-from server.services.batch_service import BatchService
+from services.batch_service import BatchService
 
 logger = logging.getLogger(__name__)
 
