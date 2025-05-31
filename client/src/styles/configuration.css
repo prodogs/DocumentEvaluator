@@ -1,0 +1,491 @@
+/* Configuration Manager - Stunning Design */
+
+.configuration-manager {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #ff9a56 0%, #ff6b35 100%);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Hero Section */
+.config-hero {
+  background: linear-gradient(135deg, #ff9a56 0%, #ff6b35 100%);
+  color: white;
+  padding: 3rem 2rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.config-hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="gears" width="40" height="40" patternUnits="userSpaceOnUse"><circle cx="20" cy="20" r="8" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2"/><circle cx="20" cy="20" r="3" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23gears)"/></svg>');
+  opacity: 0.3;
+  animation: rotate-gears 40s linear infinite;
+}
+
+@keyframes rotate-gears {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.hero-content {
+  text-align: center;
+  position: relative;
+  z-index: 2;
+  margin-bottom: 2rem;
+}
+
+.hero-title {
+  font-size: 3rem;
+  font-weight: 700;
+  margin: 0 0 1rem 0;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.hero-icon {
+  font-size: 3.5rem;
+  animation: gear-spin 4s ease-in-out infinite;
+}
+
+@keyframes gear-spin {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(90deg) scale(1.1); }
+  50% { transform: rotate(180deg) scale(1); }
+  75% { transform: rotate(270deg) scale(1.1); }
+}
+
+.hero-subtitle {
+  font-size: 1.2rem;
+  opacity: 0.9;
+  margin: 0;
+  font-weight: 300;
+  letter-spacing: 0.5px;
+}
+
+/* Stats Dashboard */
+.config-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  max-width: 1000px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+.stat-card {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  padding: 2rem;
+  text-align: center;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s ease;
+}
+
+.stat-card:hover::before {
+  left: 100%;
+}
+
+.stat-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.stat-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  display: block;
+}
+
+.stat-number {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: #fff;
+}
+
+.stat-label {
+  font-size: 1.1rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.stat-detail {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Sub-tabs */
+.config-sub-tabs {
+  display: flex;
+  background: white;
+  border-radius: 15px 15px 0 0;
+  margin: 0 2rem;
+  box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.1);
+  position: relative;
+  z-index: 3;
+}
+
+.sub-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 1.5rem 2rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  font-size: 1rem;
+  font-weight: 500;
+  color: #666;
+  position: relative;
+  border-radius: 15px 15px 0 0;
+}
+
+.sub-tab:first-child {
+  border-radius: 15px 0 0 0;
+}
+
+.sub-tab:last-child {
+  border-radius: 0 15px 0 0;
+}
+
+.sub-tab:hover {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  color: #333;
+  transform: translateY(-2px);
+}
+
+.sub-tab.active {
+  background: linear-gradient(135deg, #ff9a56 0%, #ff6b35 100%);
+  color: white;
+  box-shadow: 0 5px 15px rgba(255, 154, 86, 0.4);
+}
+
+.sub-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 50px;
+  height: 3px;
+  background: white;
+  border-radius: 2px;
+}
+
+.tab-icon {
+  font-size: 1.25rem;
+}
+
+.tab-text {
+  font-weight: 600;
+}
+
+.tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: inherit;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  min-width: 24px;
+  text-align: center;
+}
+
+.sub-tab.active .tab-badge {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Tab Content */
+.config-tab-content {
+  background: white;
+  margin: 0 2rem 2rem 2rem;
+  border-radius: 0 0 15px 15px;
+  min-height: 600px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  position: relative;
+  z-index: 2;
+  overflow: hidden;
+}
+
+.llm-configs-section,
+.prompts-section {
+  padding: 0;
+  background: transparent;
+  height: 100%;
+}
+
+/* Override management container styles for seamless integration */
+.config-tab-content .llm-config-manager,
+.config-tab-content .prompt-manager {
+  background: transparent;
+  padding: 2.5rem;
+  margin: 0;
+  min-height: auto;
+  max-width: none;
+}
+
+/* Fix spacing for management header */
+.config-tab-content .manager-header {
+  margin-bottom: 2.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid #f1f3f4;
+}
+
+.config-tab-content .manager-header h3 {
+  color: #333;
+  font-size: 1.75rem;
+  margin: 0;
+}
+
+.config-tab-content .manager-header p {
+  margin: 0.75rem 0 1.5rem 0;
+  color: #6c757d;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* Enhanced card animations */
+.config-tab-content .config-card,
+.config-tab-content .prompt-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid #e1e5e9;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.config-tab-content .config-card:hover,
+.config-tab-content .prompt-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+  border-color: #ff9a56;
+}
+
+.config-tab-content .config-card::before,
+.config-tab-content .prompt-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #ff9a56, #ff6b35);
+  transform: scaleX(0);
+  transition: transform 0.3s ease;
+}
+
+.config-tab-content .config-card:hover::before,
+.config-tab-content .prompt-card:hover::before {
+  transform: scaleX(1);
+}
+
+/* Enhanced buttons */
+.config-tab-content .btn {
+  transition: all 0.2s ease;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.config-tab-content .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.config-tab-content .btn-primary {
+  background: linear-gradient(135deg, #ff9a56 0%, #ff6b35 100%);
+  border: none;
+  color: white;
+}
+
+.config-tab-content .btn-primary:hover {
+  background: linear-gradient(135deg, #ff8a46 0%, #ff5b25 100%);
+}
+
+/* Enhanced grids */
+.config-tab-content .configs-grid,
+.config-tab-content .prompts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+/* Enhanced forms */
+.config-tab-content .config-form,
+.config-tab-content .prompt-form {
+  background: linear-gradient(135deg, #fff8f5 0%, #ffeee6 100%);
+  border-radius: 12px;
+  padding: 2.5rem;
+  margin-bottom: 3rem;
+  border: 1px solid #ffe0d1;
+  box-shadow: 0 4px 12px rgba(255, 154, 86, 0.1);
+}
+
+.config-tab-content .config-form h4,
+.config-tab-content .prompt-form h4 {
+  color: #333;
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.config-tab-content .form-group label {
+  color: #495057;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.config-tab-content .form-group input,
+.config-tab-content .form-group select,
+.config-tab-content .form-group textarea {
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  padding: 0.75rem;
+  transition: all 0.2s ease;
+  font-size: 0.95rem;
+}
+
+.config-tab-content .form-group input:focus,
+.config-tab-content .form-group select:focus,
+.config-tab-content .form-group textarea:focus {
+  border-color: #ff9a56;
+  box-shadow: 0 0 0 3px rgba(255, 154, 86, 0.1);
+  outline: none;
+}
+
+/* Status indicators */
+.config-tab-content .status.active {
+  color: #28a745;
+  font-weight: 600;
+}
+
+.config-tab-content .status.inactive {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+/* Message styling */
+.config-tab-content .message {
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.config-tab-content .message.success {
+  background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.config-tab-content .message.error {
+  background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+/* No data states */
+.config-tab-content .no-data {
+  text-align: center;
+  padding: 3rem;
+  color: #6c757d;
+  font-size: 1.1rem;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 12px;
+  border: 2px dashed #dee2e6;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .config-hero {
+    padding: 2rem 1rem;
+  }
+  
+  .hero-title {
+    font-size: 2rem;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .hero-icon {
+    font-size: 2.5rem;
+  }
+  
+  .hero-subtitle {
+    font-size: 1rem;
+  }
+  
+  .config-stats {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .stat-card {
+    padding: 1.5rem;
+  }
+  
+  .config-sub-tabs {
+    margin: 0 1rem;
+  }
+  
+  .config-tab-content {
+    margin: 0 1rem 1rem 1rem;
+  }
+  
+  .sub-tab {
+    padding: 1rem;
+    font-size: 0.9rem;
+  }
+  
+  .tab-text {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .config-hero {
+    padding: 2rem 1rem;
+  }
+  
+  .hero-title {
+    font-size: 1.75rem;
+  }
+  
+  .config-sub-tabs {
+    margin: 0 0.5rem;
+  }
+  
+  .config-tab-content {
+    margin: 0 0.5rem 0.5rem 0.5rem;
+  }
+}

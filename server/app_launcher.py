@@ -127,6 +127,14 @@ def main():
         from server.api.folder_preprocessing_routes import folder_preprocessing_bp
         app.register_blueprint(folder_preprocessing_bp)
 
+        # Register LLM provider management routes
+        from server.api.llm_provider_routes import llm_provider_bp
+        app.register_blueprint(llm_provider_bp)
+
+        # Register model management routes
+        from server.api.model_routes import model_bp
+        app.register_blueprint(model_bp)
+
         # Initialize service integration components
         from server.services.health_monitor import health_monitor
         from server.api.status_polling import polling_service

@@ -1,0 +1,415 @@
+/* Folders Manager - Stunning Design */
+
+.folders-manager {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Hero Section */
+.folders-hero {
+  background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+  color: white;
+  padding: 3rem 2rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.folders-hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="folders" width="30" height="30" patternUnits="userSpaceOnUse"><rect x="5" y="10" width="20" height="15" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1.5" rx="2"/><rect x="5" y="8" width="8" height="4" fill="rgba(255,255,255,0.1)" rx="1"/></pattern></defs><rect width="100" height="100" fill="url(%23folders)"/></svg>');
+  opacity: 0.3;
+  animation: folder-float 25s ease-in-out infinite;
+}
+
+@keyframes folder-float {
+  0%, 100% { transform: translateY(0px) translateX(0px); }
+  25% { transform: translateY(-10px) translateX(5px); }
+  50% { transform: translateY(5px) translateX(-5px); }
+  75% { transform: translateY(-5px) translateX(10px); }
+}
+
+.hero-content {
+  text-align: center;
+  position: relative;
+  z-index: 2;
+  margin-bottom: 2rem;
+}
+
+.hero-title {
+  font-size: 3rem;
+  font-weight: 700;
+  margin: 0 0 1rem 0;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.hero-icon {
+  font-size: 3.5rem;
+  animation: folder-bounce 3s ease-in-out infinite;
+}
+
+@keyframes folder-bounce {
+  0%, 100% { transform: scale(1) rotateY(0deg); }
+  25% { transform: scale(1.1) rotateY(-10deg); }
+  50% { transform: scale(1.05) rotateY(10deg); }
+  75% { transform: scale(1.1) rotateY(-5deg); }
+}
+
+.hero-subtitle {
+  font-size: 1.2rem;
+  opacity: 0.9;
+  margin: 0;
+  font-weight: 300;
+  letter-spacing: 0.5px;
+}
+
+/* Stats Dashboard */
+.folders-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  max-width: 1000px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+.stat-card {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  padding: 2rem;
+  text-align: center;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s ease;
+}
+
+.stat-card:hover::before {
+  left: 100%;
+}
+
+.stat-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.stat-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  display: block;
+}
+
+.stat-number {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: #fff;
+}
+
+.stat-label {
+  font-size: 1.1rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.stat-detail {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Main Content */
+.folders-content {
+  background: white;
+  margin: 0 2rem 2rem 2rem;
+  border-radius: 20px 20px 0 0;
+  min-height: 600px;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.1);
+  position: relative;
+  z-index: 2;
+  overflow: hidden;
+}
+
+.folders-section {
+  padding: 0;
+  background: transparent;
+  height: 100%;
+}
+
+/* Override management container styles for seamless integration */
+.folders-content .folder-manager {
+  background: transparent;
+  padding: 2.5rem;
+  margin: 0;
+  min-height: auto;
+  max-width: none;
+}
+
+/* Fix spacing for management header */
+.folders-content .manager-header {
+  margin-bottom: 2.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid #f1f3f4;
+}
+
+.folders-content .manager-header h3 {
+  color: #333;
+  font-size: 1.75rem;
+  margin: 0;
+}
+
+.folders-content .manager-header p {
+  margin: 0.75rem 0 1.5rem 0;
+  color: #6c757d;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* Enhanced card animations */
+.folders-content .folder-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid #e1e5e9;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.folders-content .folder-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+  border-color: #56ab2f;
+}
+
+.folders-content .folder-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #56ab2f, #a8e6cf);
+  transform: scaleX(0);
+  transition: transform 0.3s ease;
+}
+
+.folders-content .folder-card:hover::before {
+  transform: scaleX(1);
+}
+
+/* Enhanced buttons */
+.folders-content .btn {
+  transition: all 0.2s ease;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.folders-content .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.folders-content .btn-primary {
+  background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+  border: none;
+  color: white;
+}
+
+.folders-content .btn-primary:hover {
+  background: linear-gradient(135deg, #4a9b29 0%, #98d6bf 100%);
+}
+
+/* Enhanced grids */
+.folders-content .folders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+/* Enhanced forms */
+.folders-content .folder-form {
+  background: linear-gradient(135deg, #f8fff8 0%, #f0f9f0 100%);
+  border-radius: 12px;
+  padding: 2.5rem;
+  margin-bottom: 3rem;
+  border: 1px solid #e8f5e8;
+  box-shadow: 0 4px 12px rgba(86, 171, 47, 0.1);
+}
+
+.folders-content .folder-form h4 {
+  color: #333;
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.folders-content .form-group label {
+  color: #495057;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.folders-content .form-group input,
+.folders-content .form-group select,
+.folders-content .form-group textarea {
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  padding: 0.75rem;
+  transition: all 0.2s ease;
+  font-size: 0.95rem;
+}
+
+.folders-content .form-group input:focus,
+.folders-content .form-group select:focus,
+.folders-content .form-group textarea:focus {
+  border-color: #56ab2f;
+  box-shadow: 0 0 0 3px rgba(86, 171, 47, 0.1);
+  outline: none;
+}
+
+/* Status indicators */
+.folders-content .status.active {
+  color: #28a745;
+  font-weight: 600;
+}
+
+.folders-content .status.inactive {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+/* Message styling */
+.folders-content .message {
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.folders-content .message.success {
+  background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.folders-content .message.error {
+  background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+/* No data states */
+.folders-content .no-data {
+  text-align: center;
+  padding: 3rem;
+  color: #6c757d;
+  font-size: 1.1rem;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 12px;
+  border: 2px dashed #dee2e6;
+}
+
+/* File stats in folder cards */
+.folders-content .folder-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e9ecef;
+}
+
+.folders-content .folder-stat {
+  text-align: center;
+  flex: 1;
+}
+
+.folders-content .folder-stat-number {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #56ab2f;
+}
+
+.folders-content .folder-stat-label {
+  font-size: 0.8rem;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .folders-hero {
+    padding: 2rem 1rem;
+  }
+  
+  .hero-title {
+    font-size: 2rem;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .hero-icon {
+    font-size: 2.5rem;
+  }
+  
+  .hero-subtitle {
+    font-size: 1rem;
+  }
+  
+  .folders-stats {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .stat-card {
+    padding: 1.5rem;
+  }
+  
+  .folders-content {
+    margin: 0 1rem 1rem 1rem;
+  }
+  
+  .folders-content .folder-manager {
+    padding: 1.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .folders-hero {
+    padding: 2rem 1rem;
+  }
+  
+  .hero-title {
+    font-size: 1.75rem;
+  }
+  
+  .folders-content {
+    margin: 0 0.5rem 0.5rem 0.5rem;
+  }
+}
