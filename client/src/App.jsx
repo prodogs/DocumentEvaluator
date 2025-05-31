@@ -7,7 +7,7 @@ import './styles/models-providers.css';
 import './styles/analyze-documents.css';
 import './styles/configuration.css';
 import './styles/folders.css';
-import LlmConfigManager from './components/LlmConfigManager';
+
 import ModelsAndProvidersManager from './components/ModelsAndProvidersManager';
 import AnalyzeDocumentsManager from './components/AnalyzeDocumentsManager';
 import ConfigurationManager from './components/ConfigurationManager';
@@ -18,7 +18,7 @@ import BatchDashboard from './components/BatchDashboard';
 import BatchManagement from './components/BatchManagement';
 
 // Use environment variable for API URL, fallback to localhost:5001
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 console.log('🔧 API_BASE_URL configured as:', API_BASE_URL);
 
 function App() {
@@ -34,11 +34,11 @@ function App() {
   const [pollingInterval, setPollingInterval] = useState(null); // Track polling interval
 
   // Configuration state
-  const [llmConfigs, setLlmConfigs] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [llmProviders, setLlmProviders] = useState([]);
   const [prompts, setPrompts] = useState([]);
   const [folders, setFolders] = useState([]);
-  const [selectedLlmConfigs, setSelectedLlmConfigs] = useState([]);
+  const [selectedConnections, setSelectedConnections] = useState([]);
   const [selectedPrompts, setSelectedPrompts] = useState([]);
   const [selectedFolders, setSelectedFolders] = useState([]);
 
@@ -81,7 +81,7 @@ function App() {
       setPollingInterval(null);
     }
 
-    loadLlmConfigs();
+    loadConnections();
     loadPrompts();
     loadFolders();
     loadCurrentBatch(false, 'component-mount');
@@ -101,20 +101,20 @@ function App() {
     }
   }, [activeTab]);
 
-  const loadLlmConfigs = async () => {
+  const loadConnections = async () => {
     try {
-      console.log('Loading LLM configs from:', `${API_BASE_URL}/api/llm-configurations`);
-      const response = await axios.get(`${API_BASE_URL}/api/llm-configurations`);
-      console.log('LLM configs response:', response.data);
-      // Only show active LLM configurations
-      const activeConfigs = (response.data.llm_configurations || []).filter(config => config.active === true);
-      setLlmConfigs(activeConfigs);
+      console.log('Loading connections from:', `${API_BASE_URL}/api/connections`);
+      const response = await axios.get(`${API_BASE_URL}/api/connections`);
+      console.log('Connections response:', response.data);
+      // Only show active connections
+      const activeConnections = (response.data.connections || []).filter(connection => connection.is_active === true);
+      setConnections(activeConnections);
       // Don't auto-select - let user choose for each batch
-      setSelectedLlmConfigs([]);
-      setMessage(`Loaded ${activeConfigs.length} active LLM configurations`);
+      setSelectedConnections([]);
+      setMessage(`Loaded ${activeConnections.length} active connections`);
     } catch (error) {
-      console.error('Error loading LLM configurations:', error);
-      setMessage(`Error loading LLM configurations: ${error.message}`);
+      console.error('Error loading connections:', error);
+      setMessage(`Error loading connections: ${error.message}`);
     }
   };
 
@@ -206,13 +206,13 @@ function App() {
 
   const startFolderProcessing = async () => {
     // Enhanced validation with better error messages
-    if (llmConfigs.length === 0) {
-      alert('No active LLM configurations available. Please go to the Configuration tab to add and activate LLM configurations.');
+    if (connections.length === 0) {
+      alert('No active connections available. Please go to the Models & Providers tab to add and activate connections.');
       return;
     }
 
-    if (selectedLlmConfigs.length === 0) {
-      alert('Please select at least one LLM configuration for this batch.');
+    if (selectedConnections.length === 0) {
+      alert('Please select at least one connection for this batch.');
       return;
     }
 
@@ -482,7 +482,7 @@ function App() {
   const handleTabChange = (newTab) => {
     if (newTab === 'process' && activeTab !== 'process') {
       // Clear selections for fresh batch submission
-      setSelectedLlmConfigs([]);
+      setSelectedConnections([]);
       setSelectedPrompts([]);
       setSelectedFolders([]);
       setBatchName('');
@@ -553,11 +553,11 @@ function App() {
               setBatchName={setBatchName}
               batchMetaData={batchMetaData}
               setBatchMetaData={setBatchMetaData}
-              llmConfigs={llmConfigs}
+              connections={connections}
               prompts={prompts}
               folders={folders}
-              selectedLlmConfigs={selectedLlmConfigs}
-              setSelectedLlmConfigs={setSelectedLlmConfigs}
+              selectedConnections={selectedConnections}
+              setSelectedConnections={setSelectedConnections}
               selectedPrompts={selectedPrompts}
               setSelectedPrompts={setSelectedPrompts}
               selectedFolders={selectedFolders}
@@ -576,7 +576,6 @@ function App() {
 
           {activeTab === 'config' && (
             <ConfigurationManager
-              onConfigsChange={() => loadLlmConfigs()}
               onPromptsChange={() => loadPrompts()}
             />
           )}

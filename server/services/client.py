@@ -5,8 +5,8 @@ from typing import Dict, Optional, Any, Union
 from dataclasses import dataclass
 from enum import Enum
 
-from server.services.config import service_config, ServiceConfig
-from server.services.health_monitor import health_monitor
+from services.config import service_config, ServiceConfig
+from services.health_monitor import health_monitor
 
 logger = logging.getLogger(__name__)
 

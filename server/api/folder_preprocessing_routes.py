@@ -10,9 +10,9 @@ New endpoints for the folder preprocessing workflow:
 from flask import Blueprint, request, jsonify
 import logging
 import os
-from server.services.folder_preprocessing_service import FolderPreprocessingService
-from server.database import Session
-from server.models import Folder, Document, Doc
+from services.folder_preprocessing_service import FolderPreprocessingService
+from database import Session
+from models import Folder, Document, Doc
 from sqlalchemy import func
 
 folder_preprocessing_bp = Blueprint('folder_preprocessing', __name__)

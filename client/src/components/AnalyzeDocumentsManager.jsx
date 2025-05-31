@@ -6,11 +6,11 @@ const AnalyzeDocumentsManager = ({
   setBatchName,
   batchMetaData,
   setBatchMetaData,
-  llmConfigs,
+  connections,
   prompts,
   folders,
-  selectedLlmConfigs,
-  setSelectedLlmConfigs,
+  selectedConnections,
+  setSelectedConnections,
   selectedPrompts,
   setSelectedPrompts,
   selectedFolders,
@@ -26,8 +26,8 @@ const AnalyzeDocumentsManager = ({
   handleShowErrors
 }) => {
   const [stats, setStats] = useState({
-    totalConfigs: 0,
-    selectedConfigs: 0,
+    totalConnections: 0,
+    selectedConnections: 0,
     totalPrompts: 0,
     selectedPrompts: 0,
     totalFolders: 0,
@@ -36,20 +36,20 @@ const AnalyzeDocumentsManager = ({
 
   useEffect(() => {
     setStats({
-      totalConfigs: llmConfigs.length,
-      selectedConfigs: selectedLlmConfigs.length,
+      totalConnections: connections.length,
+      selectedConnections: selectedConnections.length,
       totalPrompts: prompts.length,
       selectedPrompts: selectedPrompts.length,
       totalFolders: folders.length,
       selectedFolders: selectedFolders.length
     });
-  }, [llmConfigs, prompts, folders, selectedLlmConfigs, selectedPrompts, selectedFolders]);
+  }, [connections, prompts, folders, selectedConnections, selectedPrompts, selectedFolders]);
 
-  const handleConfigToggle = (configId) => {
-    if (selectedLlmConfigs.includes(configId)) {
-      setSelectedLlmConfigs(selectedLlmConfigs.filter(id => id !== configId));
+  const handleConnectionToggle = (connectionId) => {
+    if (selectedConnections.includes(connectionId)) {
+      setSelectedConnections(selectedConnections.filter(id => id !== connectionId));
     } else {
-      setSelectedLlmConfigs([...selectedLlmConfigs, configId]);
+      setSelectedConnections([...selectedConnections, connectionId]);
     }
   };
 
@@ -69,10 +69,10 @@ const AnalyzeDocumentsManager = ({
     }
   };
 
-  const canStartProcessing = selectedLlmConfigs.length > 0 && 
-                           selectedPrompts.length > 0 && 
-                           selectedFolders.length > 0 && 
-                           batchName.trim() && 
+  const canStartProcessing = selectedConnections.length > 0 &&
+                           selectedPrompts.length > 0 &&
+                           selectedFolders.length > 0 &&
+                           batchName.trim() &&
                            !isProcessing;
 
   return (
@@ -92,10 +92,10 @@ const AnalyzeDocumentsManager = ({
         {/* Stats Dashboard */}
         <div className="analyze-stats">
           <div className="stat-card configs">
-            <div className="stat-icon">🤖</div>
+            <div className="stat-icon">🔗</div>
             <div className="stat-content">
-              <div className="stat-number">{stats.selectedConfigs}/{stats.totalConfigs}</div>
-              <div className="stat-label">LLM Configs</div>
+              <div className="stat-number">{stats.selectedConnections}/{stats.totalConnections}</div>
+              <div className="stat-label">Connections</div>
               <div className="stat-detail">Selected</div>
             </div>
           </div>
@@ -161,32 +161,32 @@ const AnalyzeDocumentsManager = ({
 
         {/* Selection Grid */}
         <div className="selection-grid">
-          {/* LLM Configurations */}
+          {/* Connections */}
           <div className="selection-section">
             <div className="section-header">
-              <h3>🤖 LLM Configurations</h3>
-              <span className="selection-count">{selectedLlmConfigs.length} selected</span>
+              <h3>🔗 Connections</h3>
+              <span className="selection-count">{selectedConnections.length} selected</span>
             </div>
-            
+
             <div className="selection-cards">
-              {llmConfigs.length === 0 ? (
+              {connections.length === 0 ? (
                 <div className="no-items">
-                  <p>⚠️ No active LLM configurations found.</p>
-                  <p>Please go to the <strong>⚙️ Configuration</strong> tab to add configurations.</p>
+                  <p>⚠️ No active connections found.</p>
+                  <p>Please go to the <strong>🔧 Models & Providers</strong> tab to add connections.</p>
                 </div>
               ) : (
-                llmConfigs.map(config => (
-                  <div 
-                    key={config.id} 
-                    className={`selection-card ${selectedLlmConfigs.includes(config.id) ? 'selected' : ''}`}
-                    onClick={() => handleConfigToggle(config.id)}
+                connections.map(connection => (
+                  <div
+                    key={connection.id}
+                    className={`selection-card ${selectedConnections.includes(connection.id) ? 'selected' : ''}`}
+                    onClick={() => handleConnectionToggle(connection.id)}
                   >
                     <div className="card-header">
-                      <span className="card-title">{config.llm_name}</span>
-                      <span className="card-badge">{config.provider_type}</span>
+                      <span className="card-title">{connection.name}</span>
+                      <span className="card-badge">{connection.provider_type}</span>
                     </div>
                     <div className="card-details">
-                      <span>Model: {config.model_name}</span>
+                      <span>Model: {connection.model_name || connection.model_common_name}</span>
                     </div>
                   </div>
                 ))

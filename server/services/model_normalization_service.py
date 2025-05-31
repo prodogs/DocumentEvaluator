@@ -10,8 +10,8 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session as SQLSession
 
-from server.database import Session
-from server.models import Model, ModelAlias, ProviderModel
+from database import Session
+from models import Model, ModelAlias, ProviderModel
 
 logger = logging.getLogger(__name__)
 

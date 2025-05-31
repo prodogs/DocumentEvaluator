@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-// Use environment variable for API URL, fallback to localhost:5004
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5004';
+// Use environment variable for API URL, fallback to localhost:5001
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
 const AsyncProcessingButton = ({ batchName, selectedLlmConfigs, selectedPrompts, onComplete, onError, onProgress }) => {
   const [isProcessing, setIsProcessing] = useState(false);

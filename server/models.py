@@ -3,6 +3,12 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
 
+# Ensure we're using the correct Base class and avoid naming conflicts
+__all__ = [
+    'Batch', 'Folder', 'Doc', 'Document', 'Prompt', 'LlmProvider', 'LlmConfiguration',
+    'LlmResponse', 'LlmModel', 'Model', 'ProviderModel', 'ModelAlias', 'BatchArchive', 'Connection'
+]
+
 class Batch(Base):
     __tablename__ = 'batches'
     __table_args__ = {'extend_existing': True}
@@ -94,6 +100,7 @@ class LlmProvider(Base):
     configurations = relationship("LlmConfiguration", back_populates="provider")
     models = relationship("LlmModel", back_populates="provider")  # Legacy relationship
     provider_models = relationship("ProviderModel", back_populates="provider")  # New relationship
+    connections = relationship("Connection", back_populates="provider")  # Connection instances
 
 # New Model Architecture
 class Model(Base):
@@ -163,45 +170,51 @@ class LlmConfiguration(Base):
     __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # Configuration identification
-    name = Column(Text, unique=True, nullable=False)  # User-friendly name (e.g., "Fast Chat", "Deep Analysis")
-    description = Column(Text)  # User description of this configuration
+    # Legacy fields (primary fields in current schema)
+    llm_name = Column(Text, nullable=False)  # Primary name field in current schema
+    base_url = Column(Text)
+    model_name = Column(Text, nullable=False)
+    api_key = Column(Text)
+    provider_type = Column(Text)
+    port_no = Column(Integer)
+    active = Column(Integer, default=1, nullable=False)  # 0 = inactive, 1 = active
 
-    # Three-entity relationships
-    model_id = Column(Integer, ForeignKey('models.id'), nullable=False)  # Which model to use
-    provider_id = Column(Integer, ForeignKey('llm_providers.id'), nullable=False)  # Which provider to use
-    provider_model_id = Column(Integer, ForeignKey('provider_models.id'), nullable=False)  # Specific provider-model relationship
+    # Provider relationship
+    provider_id = Column(Integer, ForeignKey('llm_providers.id'), nullable=True)
+
+    # Connection relationship (new architecture)
+    connection_id = Column(Integer, ForeignKey('connections.id'), nullable=True)
+
+    # Extended fields
+    available_models = Column(Text, nullable=True)  # JSON stored as TEXT for SQLite compatibility
+    model_discovery_enabled = Column(Integer, default=1, nullable=False)  # Boolean as INTEGER for SQLite
+    last_model_sync = Column(DateTime, nullable=True)
+    connection_status = Column(Text, default='unknown', nullable=False)
+    provider_config = Column(Text, nullable=True)  # JSON stored as TEXT for SQLite compatibility
+    created_at = Column(DateTime, nullable=True)
+
+    # New architecture fields (for future use)
+    model_id = Column(Integer, ForeignKey('models.id'), nullable=True)  # Which model to use
+    provider_model_id = Column(Integer, ForeignKey('provider_models.id'), nullable=True)  # Specific provider-model relationship
+    is_active = Column(Boolean, default=True, nullable=True)
+    configuration_type = Column(Text, default='batch', nullable=True)  # batch, interactive, etc.
+    user_notes = Column(Text, nullable=True)  # User notes about this configuration
 
     # Configuration settings
     temperature = Column(Float, default=0.7)
     max_tokens = Column(Integer, default=1000)
     system_prompt = Column(Text)
-    user_notes = Column(Text)  # User notes about this configuration
-
-    # Status and metadata
-    is_active = Column(Boolean, default=True, nullable=False)
-    configuration_type = Column(Text, default='batch', nullable=False)  # batch, interactive, etc.
-    created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now())
 
-    # Legacy fields (for backward compatibility)
-    llm_name = Column(Text)  # Keep for existing data
-    base_url = Column(Text)
-    model_name = Column(Text)
-    api_key = Column(Text)
-    provider_type = Column(Text)
-    port_no = Column(Integer)
-    active = Column(Integer, default=1, nullable=False)  # 0 = inactive, 1 = active
-    available_models = Column(JSON, nullable=True)
-    model_discovery_enabled = Column(Boolean, default=True, nullable=False)
-    last_model_sync = Column(DateTime, nullable=True)
-    connection_status = Column(Text, default='unknown', nullable=False)
-    provider_config = Column(JSON, nullable=True)
+    # Configuration identification (future use)
+    name = Column(Text, nullable=True)  # User-friendly name (e.g., "Fast Chat", "Deep Analysis") - future use
+    description = Column(Text, nullable=True)  # User description of this configuration - future use
 
     # Relationships
     model = relationship("Model", back_populates="configurations")
     provider = relationship("LlmProvider", back_populates="configurations")
     provider_model = relationship("ProviderModel")
+    connection = relationship("Connection", back_populates="llm_configurations")
     llm_responses = relationship("LlmResponse", foreign_keys="LlmResponse.llm_config_id", back_populates="llm_config")
 
 class LlmResponse(Base):
@@ -221,6 +234,13 @@ class LlmResponse(Base):
     response_time_ms = Column(Integer)
     error_message = Column(Text)
     overall_score = Column(Float, nullable=True)  # Suitability score (0-100) for LLM readiness
+
+    # Token metrics (added for analyze_status response compatibility)
+    input_tokens = Column(Integer, nullable=True)  # Number of input tokens sent to the LLM
+    output_tokens = Column(Integer, nullable=True)  # Number of output tokens received from the LLM
+    time_taken_seconds = Column(Float, nullable=True)  # Time taken for the LLM call in seconds
+    tokens_per_second = Column(Float, nullable=True)  # Rate of tokens per second
+
     timestamp = Column(DateTime, default=func.now())
 
     document = relationship("Document", back_populates="llm_responses")
@@ -241,3 +261,58 @@ class BatchArchive(Base):
     documents_data = Column(JSON, nullable=False)  # All documents data in JSON format
     llm_responses_data = Column(JSON, nullable=False)  # All LLM responses data in JSON format
     archive_metadata = Column(JSON, nullable=True)  # Additional metadata (counts, stats, etc.)
+
+class Connection(Base):
+    """
+    A Connection represents a specific instance of a provider with actual connection details.
+
+    Examples:
+    - "My OpenAI Account" (connection to OpenAI provider with specific API key)
+    - "Local Ollama Server" (connection to Ollama provider with specific URL)
+    - "Company LM Studio" (connection to LM Studio provider with specific endpoint)
+    """
+    __tablename__ = 'connections'
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Connection identification
+    name = Column(Text, unique=True, nullable=False)  # User-friendly name (e.g., "My OpenAI Account", "Local Ollama")
+    description = Column(Text)  # User description of this connection
+
+    # Provider relationship
+    provider_id = Column(Integer, ForeignKey('llm_providers.id'), nullable=False)
+
+    # Model relationship (optional - for model-first workflow)
+    model_id = Column(Integer, ForeignKey('models.id'), nullable=True)
+
+    # Connection details (specific to this connection instance)
+    base_url = Column(Text)  # Override provider's default URL
+    api_key = Column(Text)  # API key or authentication token
+    port_no = Column(Integer)  # Port number if different from URL
+
+    # Connection configuration (provider-specific settings)
+    connection_config = Column(Text)  # JSON stored as TEXT for SQLite compatibility
+
+    # Status and metadata
+    is_active = Column(Boolean, default=True, nullable=False)
+    connection_status = Column(Text, default='unknown', nullable=False)  # unknown, connected, failed
+    last_tested = Column(DateTime, nullable=True)
+    last_test_result = Column(Text)  # Last test result message
+
+    # Model discovery
+    supports_model_discovery = Column(Boolean, default=True, nullable=False)
+    available_models = Column(Text, nullable=True)  # JSON stored as TEXT
+    last_model_sync = Column(DateTime, nullable=True)
+
+    # User notes
+    notes = Column(Text)  # User notes about this connection
+
+    # Timestamps
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    provider = relationship("LlmProvider", back_populates="connections")
+    model = relationship("Model", foreign_keys=[model_id])
+    llm_configurations = relationship("LlmConfiguration", back_populates="connection")

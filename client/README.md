@@ -56,7 +56,7 @@ If the launch scripts don't work for you, you can manually set up and start the 
 Create a `.env` file in the root of the client directory with the following content:
 
 ```
-VITE_API_URL=http://localhost:5001
+VITE_API_BASE_URL=http://localhost:5001
 ```
 
 Change the URL if your backend is running on a different host or port.

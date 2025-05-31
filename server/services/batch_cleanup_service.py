@@ -11,8 +11,8 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from sqlalchemy.sql import func
-from server.models import Batch, Document, LlmResponse
-from server.database import Session
+from models import Batch, Document, LlmResponse
+from database import Session
 
 logger = logging.getLogger(__name__)
 

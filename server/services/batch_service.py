@@ -13,9 +13,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.sql import func
 from sqlalchemy import and_, or_
-from server.models import Batch, Document, LlmResponse, Folder, LlmConfiguration, Prompt, Doc
-from server.database import Session
-from server.services.document_encoding_service import DocumentEncodingService
+from models import Batch, Document, LlmResponse, Folder, LlmConfiguration, Prompt, Doc
+from database import Session
+from services.document_encoding_service import DocumentEncodingService
 import os
 
 logger = logging.getLogger(__name__)
@@ -321,7 +321,7 @@ class BatchService:
             logger.info(f"📄 Found {len(documents)} documents with {len(responses_to_process)} responses to process")
 
             # Start processing responses (similar to existing process_folder logic)
-            from server.api.process_folder import analyze_document_with_llm
+            from api.process_folder import analyze_document_with_llm
             import asyncio
             import threading
 

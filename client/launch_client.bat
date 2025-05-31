@@ -23,7 +23,7 @@ if not exist package.json (
 
     REM Create a basic .env file
     echo Creating .env file...
-    echo VITE_API_URL=http://localhost:5001 > .env
+    echo VITE_API_BASE_URL=http://localhost:5001 > .env
 )
 
 REM Install dependencies if node_modules doesn't exist
@@ -33,8 +33,8 @@ if not exist node_modules (
 )
 
 REM Set the backend URL environment variable if not already set
-if not defined VITE_API_URL (
-    set VITE_API_URL=http://localhost:5001
+if not defined VITE_API_BASE_URL (
+    set VITE_API_BASE_URL=http://localhost:5001
 )
 
 REM Start the development server

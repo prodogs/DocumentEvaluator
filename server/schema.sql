@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS llm_responses (
     response_text TEXT, -- Added missing column
     response_time_ms INTEGER,
     error_message TEXT,
+    overall_score REAL, -- Suitability score (0-100) for LLM readiness
+    -- Token metrics (for analyze_status response compatibility)
+    input_tokens INTEGER, -- Number of input tokens sent to the LLM
+    output_tokens INTEGER, -- Number of output tokens received from the LLM
+    time_taken_seconds REAL, -- Time taken for the LLM call in seconds
+    tokens_per_second REAL, -- Rate of tokens per second
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (document_id) REFERENCES documents(id),
     FOREIGN KEY (prompt_id) REFERENCES prompts(id)

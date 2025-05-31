@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ModelManager from './ModelManager';
 import LlmProviderManager from './LlmProviderManager';
+import ConnectionManager from './ConnectionManager';
 import '../styles/models-providers.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
@@ -13,7 +14,8 @@ const ModelsAndProvidersManager = ({ onProvidersChange }) => {
     activeModels: 0,
     totalProviders: 0,
     activeProviders: 0,
-    modelProviderConnections: 0
+    totalConnections: 0,
+    activeConnections: 0
   });
   const [loading, setLoading] = useState(true);
 
@@ -32,24 +34,18 @@ const ModelsAndProvidersManager = ({ onProvidersChange }) => {
       // Load providers stats
       const providersResponse = await axios.get(`${API_BASE_URL}/api/llm-providers`);
       const providers = providersResponse.data.providers || [];
-      
-      // Calculate connections (models available through providers)
-      let totalConnections = 0;
-      for (const provider of providers) {
-        try {
-          const modelsResponse = await axios.get(`${API_BASE_URL}/api/llm-providers/${provider.id}/models`);
-          totalConnections += (modelsResponse.data.models || []).length;
-        } catch (error) {
-          // Ignore errors for individual providers
-        }
-      }
+
+      // Load connections stats
+      const connectionsResponse = await axios.get(`${API_BASE_URL}/api/connections`);
+      const connections = connectionsResponse.data.connections || [];
 
       setStats({
         totalModels: models.length,
         activeModels: models.filter(m => m.is_globally_active).length,
         totalProviders: providers.length,
         activeProviders: providers.length, // All providers are considered active for now
-        modelProviderConnections: totalConnections
+        totalConnections: connections.length,
+        activeConnections: connections.filter(c => c.is_active).length
       });
     } catch (error) {
       console.error('Error loading stats:', error);
@@ -106,9 +102,9 @@ const ModelsAndProvidersManager = ({ onProvidersChange }) => {
           <div className="stat-card connections">
             <div className="stat-icon">🔗</div>
             <div className="stat-content">
-              <div className="stat-number">{loading ? '...' : stats.modelProviderConnections}</div>
+              <div className="stat-number">{loading ? '...' : stats.totalConnections}</div>
               <div className="stat-label">Connections</div>
-              <div className="stat-detail">Model-Provider links</div>
+              <div className="stat-detail">{loading ? '...' : stats.activeConnections} active</div>
             </div>
           </div>
         </div>
@@ -133,6 +129,15 @@ const ModelsAndProvidersManager = ({ onProvidersChange }) => {
           <span className="tab-text">Providers</span>
           <span className="tab-badge">{stats.totalProviders}</span>
         </button>
+
+        <button
+          className={`sub-tab ${activeSubTab === 'connections' ? 'active' : ''}`}
+          onClick={() => handleSubTabChange('connections')}
+        >
+          <span className="tab-icon">🔗</span>
+          <span className="tab-text">Connections</span>
+          <span className="tab-badge">{stats.totalConnections}</span>
+        </button>
       </div>
 
       {/* Tab Content */}
@@ -146,6 +151,12 @@ const ModelsAndProvidersManager = ({ onProvidersChange }) => {
         {activeSubTab === 'providers' && (
           <div className="providers-section">
             <LlmProviderManager onProvidersChange={handleDataChange} />
+          </div>
+        )}
+
+        {activeSubTab === 'connections' && (
+          <div className="connections-section">
+            <ConnectionManager onConnectionsChange={handleDataChange} />
           </div>
         )}
       </div>

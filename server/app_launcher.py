@@ -135,6 +135,10 @@ def main():
         from server.api.model_routes import model_bp
         app.register_blueprint(model_bp)
 
+        # Register connection management routes
+        from server.api.connection_routes import connection_bp
+        app.register_blueprint(connection_bp)
+
         # Initialize service integration components
         from server.services.health_monitor import health_monitor
         from server.api.status_polling import polling_service

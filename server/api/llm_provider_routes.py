@@ -8,9 +8,9 @@ from flask import Blueprint, request, jsonify
 import logging
 from typing import Dict, Any
 
-from server.services.llm_provider_service import llm_provider_service
-from server.database import Session
-from server.models import LlmProvider, LlmModel, LlmConfiguration
+from services.llm_provider_service import llm_provider_service
+from database import Session
+from models import LlmProvider, LlmModel, LlmConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -341,13 +341,23 @@ def get_provider_default_config(provider_id: int):
                 'success': False,
                 'error': 'Provider not found'
             }), 404
-        
+
         # Get default config from provider adapter
         provider_type = provider['provider_type']
         if provider_type in llm_provider_service.provider_adapters:
             adapter = llm_provider_service.provider_adapters[provider_type]
             default_config = adapter.get_default_config()
-            
+
+            # Override with provider's configured default_base_url if available
+            if provider.get('default_base_url'):
+                default_config['base_url'] = provider['default_base_url']
+
+                # Extract port from URL if present
+                import re
+                port_match = re.search(r':(\d+)(?:/|$)', provider['default_base_url'])
+                if port_match:
+                    default_config['port_no'] = int(port_match.group(1))
+
             return jsonify({
                 'success': True,
                 'default_config': default_config

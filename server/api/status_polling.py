@@ -5,9 +5,9 @@ import json
 import logging
 from datetime import datetime, timedelta
 from sqlalchemy.sql import func
-from server.models import LlmResponse
-from server.database import Session
-from server.services.client import rag_client
+from models import LlmResponse
+from database import Session
+from services.client import rag_client
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +234,9 @@ class StatusPollingService:
             # Calculate end-to-end response time
             end_to_end_time_ms = self._calculate_end_to_end_time(llm_response)
 
+            # Extract token metrics from the results
+            token_metrics = self._extract_token_metrics(results)
+
             # Update the LLM response record
             llm_response.status = 'S'  # Success
             llm_response.completed_processing_at = func.now()
@@ -241,6 +244,12 @@ class StatusPollingService:
             llm_response.response_json = json.dumps(response_json)
             llm_response.error_message = None
             llm_response.overall_score = overall_score  # Store the suitability score (0-100)
+
+            # Store token metrics
+            llm_response.input_tokens = token_metrics.get('input_tokens')
+            llm_response.output_tokens = token_metrics.get('output_tokens')
+            llm_response.time_taken_seconds = token_metrics.get('time_taken_seconds')
+            llm_response.tokens_per_second = token_metrics.get('tokens_per_second')
 
             # Update response_time_ms with end-to-end time (overwriting the initial submission time)
             if end_to_end_time_ms is not None:
@@ -303,6 +312,71 @@ class StatusPollingService:
 
         except Exception as e:
             logger.error(f"Error handling not found task {llm_response.task_id}: {e}", exc_info=True)
+
+    def _extract_token_metrics(self, results):
+        """
+        Extract token metrics from the analyze_status results.
+
+        Args:
+            results: List of LLMPromptResponse objects from analyze_status
+
+        Returns:
+            dict: Aggregated token metrics with keys:
+                - input_tokens: Total input tokens across all prompts
+                - output_tokens: Total output tokens across all prompts
+                - time_taken_seconds: Total time taken across all prompts
+                - tokens_per_second: Average tokens per second
+        """
+        try:
+            if not results or not isinstance(results, list):
+                return {}
+
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_time_taken = 0.0
+            valid_results = 0
+
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+
+                # Extract token metrics from each result
+                input_tokens = result.get('input_tokens')
+                output_tokens = result.get('output_tokens')
+                time_taken = result.get('time_taken_seconds')
+
+                # Only count results that have token information
+                if input_tokens is not None or output_tokens is not None:
+                    valid_results += 1
+
+                    if input_tokens is not None:
+                        total_input_tokens += input_tokens
+                    if output_tokens is not None:
+                        total_output_tokens += output_tokens
+                    if time_taken is not None:
+                        total_time_taken += time_taken
+
+            if valid_results == 0:
+                return {}
+
+            # Calculate average tokens per second
+            tokens_per_second = None
+            if total_time_taken > 0 and total_output_tokens > 0:
+                tokens_per_second = total_output_tokens / total_time_taken
+
+            metrics = {
+                'input_tokens': total_input_tokens if total_input_tokens > 0 else None,
+                'output_tokens': total_output_tokens if total_output_tokens > 0 else None,
+                'time_taken_seconds': total_time_taken if total_time_taken > 0 else None,
+                'tokens_per_second': tokens_per_second
+            }
+
+            logger.debug(f"Extracted token metrics: {metrics}")
+            return metrics
+
+        except Exception as e:
+            logger.error(f"Error extracting token metrics: {e}")
+            return {}
 
     def _calculate_end_to_end_time(self, llm_response):
         """
@@ -373,7 +447,7 @@ class StatusPollingService:
         """Trigger the dynamic processing queue to check for waiting documents"""
         try:
             # Import here to avoid circular imports
-            from server.services.dynamic_processing_queue import dynamic_queue
+            from services.dynamic_processing_queue import dynamic_queue
 
             # Start the queue if it's not running
             if not dynamic_queue.queue_thread or not dynamic_queue.queue_thread.is_alive():
@@ -389,8 +463,8 @@ class StatusPollingService:
         """Update batch progress when an LLM response is completed/failed"""
         try:
             # Import here to avoid circular imports
-            from server.services.batch_service import BatchService
-            from server.models import Document
+            from services.batch_service import BatchService
+            from models import Document
 
             # Get the document to find the batch_id
             session = Session()

@@ -1,20 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import LlmConfigManager from './LlmConfigManager';
+
 import PromptManager from './PromptManager';
 import '../styles/configuration.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
 
-const ConfigurationManager = ({ onConfigsChange, onPromptsChange }) => {
-  const [activeSubTab, setActiveSubTab] = useState('llm-configs');
+const ConfigurationManager = ({ onPromptsChange }) => {
+  const [activeSubTab, setActiveSubTab] = useState('prompts');
   const [stats, setStats] = useState({
-    totalConfigs: 0,
-    activeConfigs: 0,
     totalPrompts: 0,
-    activePrompts: 0,
-    totalProviders: 0,
-    configuredProviders: 0
+    activePrompts: 0
   });
   const [loading, setLoading] = useState(true);
 

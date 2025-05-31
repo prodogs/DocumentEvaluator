@@ -1,7 +1,7 @@
 import os
-from server.models import Document, LlmConfiguration, Prompt, LlmResponse
-from server.database import Session
-from server.services.batch_service import batch_service
+from models import Document, LlmConfiguration, Prompt, LlmResponse
+from database import Session
+from services.batch_service import batch_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ def process_folder(folder_path, task_id=None, batch_name=None, folder_id=None, b
         logger.info(f"Starting process_folder for: {folder_path}, Task ID: {task_id}, Batch Name: {batch_name}, Batch ID: {batch_id}")
 
         # Import batch_service at the top to avoid scoping issues
-        from server.services.batch_service import batch_service
+        from services.batch_service import batch_service
 
         # Use existing batch or create a new one
         if batch_id is not None:

@@ -15,9 +15,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session as SQLSession
 from sqlalchemy import and_
 
-from server.database import Session
-from server.models import LlmProvider, LlmModel, LlmConfiguration, Model, ProviderModel
-from server.services.model_service import model_service
+from database import Session
+from models import LlmProvider, LlmModel, LlmConfiguration, Model, ProviderModel
+from services.model_service import model_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +31,11 @@ class LlmProviderService:
     def _load_provider_adapters(self):
         """Load provider adapters dynamically"""
         try:
-            from server.services.providers.ollama_provider import OllamaProvider
-            from server.services.providers.openai_provider import OpenAIProvider
-            from server.services.providers.lmstudio_provider import LMStudioProvider
-            from server.services.providers.amazon_provider import AmazonProvider
-            from server.services.providers.grok_provider import GrokProvider
+            from services.providers.ollama_provider import OllamaProvider
+            from services.providers.openai_provider import OpenAIProvider
+            from services.providers.lmstudio_provider import LMStudioProvider
+            from services.providers.amazon_provider import AmazonProvider
+            from services.providers.grok_provider import GrokProvider
             
             self.provider_adapters = {
                 'ollama': OllamaProvider(),

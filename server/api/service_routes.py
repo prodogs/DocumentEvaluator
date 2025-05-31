@@ -1,11 +1,11 @@
 from flask import Blueprint, jsonify, request
 import logging
 
-from server.services.config import service_config
-from server.services.health_monitor import health_monitor
-from server.services.client import service_client
-from server.models import LlmResponse, Prompt, LlmConfiguration, Folder
-from server.database import Session
+from services.config import service_config
+from services.health_monitor import health_monitor
+from services.client import service_client
+from models import LlmResponse, Prompt, LlmConfiguration, Folder
+from database import Session
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def list_services():
 def get_queue_status():
     """Get dynamic processing queue status"""
     try:
-        from server.services.dynamic_processing_queue import dynamic_queue
+        from services.dynamic_processing_queue import dynamic_queue
 
         status = dynamic_queue.get_queue_status()
 
@@ -59,7 +59,7 @@ def get_queue_status():
 def start_queue():
     """Start the dynamic processing queue"""
     try:
-        from server.services.dynamic_processing_queue import dynamic_queue
+        from services.dynamic_processing_queue import dynamic_queue
 
         # Check if already running
         status = dynamic_queue.get_queue_status()
@@ -95,7 +95,7 @@ def start_queue():
 def stop_queue():
     """Stop the dynamic processing queue"""
     try:
-        from server.services.dynamic_processing_queue import dynamic_queue
+        from services.dynamic_processing_queue import dynamic_queue
 
         # Stop the queue
         dynamic_queue.stop_queue_processing()
@@ -122,7 +122,7 @@ def stop_queue():
 def get_polling_status():
     """Get status polling service status"""
     try:
-        from server.api.status_polling import polling_service
+        from api.status_polling import polling_service
 
         is_running = polling_service.polling_thread and polling_service.polling_thread.is_alive()
 
@@ -148,7 +148,7 @@ def get_polling_status():
 def start_polling():
     """Start the status polling service"""
     try:
-        from server.api.status_polling import polling_service
+        from api.status_polling import polling_service
 
         # Check if already running
         is_running = polling_service.polling_thread and polling_service.polling_thread.is_alive()
@@ -189,7 +189,7 @@ def start_polling():
 def stop_polling():
     """Stop the status polling service"""
     try:
-        from server.api.status_polling import polling_service
+        from api.status_polling import polling_service
 
         # Stop the polling service
         polling_service.stop_polling_service()
@@ -335,7 +335,7 @@ def test_service_connection(service_name):
             return jsonify({'error': f'Service not found: {service_name}'}), 404
 
         # Test with a simple GET request to health endpoint
-        from server.services.client import RequestMethod
+        from services.client import RequestMethod
         response = service_client.call_service(
             service_name=service_name,
             endpoint="/health" if service_name == "rag_api" else "/api/health",
@@ -731,7 +731,7 @@ def delete_prompt(prompt_id):
             return jsonify({'error': f'Prompt not found: {prompt_id}'}), 404
 
         # Check if prompt is being used in any LLM responses
-        from server.models import LlmResponse
+        from models import LlmResponse
         responses_count = session.query(LlmResponse).filter(LlmResponse.prompt_id == prompt_id).count()
 
         if responses_count > 0:
@@ -992,7 +992,7 @@ def delete_llm_configuration(config_id):
             return jsonify({'error': f'LLM configuration not found: {config_id}'}), 404
 
         # Check if configuration is being used in any LLM responses
-        from server.models import LlmResponse
+        from models import LlmResponse
         responses_count = session.query(LlmResponse).filter(LlmResponse.llm_config_id == config_id).count()
 
         if responses_count > 0:
@@ -1044,7 +1044,7 @@ def test_llm_configuration(config_id):
         session.close()
 
         # Import the RAG service client
-        from server.services.client import RAGServiceClient, RequestMethod
+        from services.client import RAGServiceClient, RequestMethod
         import json
 
         # Create RAG service client instance

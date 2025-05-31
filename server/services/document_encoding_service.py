@@ -8,7 +8,7 @@ import base64
 import mimetypes
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from server.models import Doc, Document
+from models import Doc, Document
 
 class DocumentEncodingService:
     """Service for encoding and storing document content"""

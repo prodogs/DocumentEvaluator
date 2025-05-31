@@ -6,8 +6,8 @@ from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 from sqlalchemy.sql import func
 
-from server.models import Document, LlmConfiguration, Prompt, LlmResponse
-from server.database import Session
+from models import Document, LlmConfiguration, Prompt, LlmResponse
+from database import Session
 
 document_routes = Blueprint('document_routes', __name__)
 

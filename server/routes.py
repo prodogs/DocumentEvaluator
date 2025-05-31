@@ -4,10 +4,10 @@ import uuid
 import threading
 
 # Import from models and database
-from server.models import Folder, Document, LlmConfiguration, Prompt, LlmResponse
-from server.database import Session
-from server.api.process_folder import process_folder
-from server.services.batch_service import batch_service
+from models import Folder, Document, LlmConfiguration, Prompt, LlmResponse
+from database import Session
+from api.process_folder import process_folder
+from services.batch_service import batch_service
 
 logger = logging.getLogger(__name__)
 

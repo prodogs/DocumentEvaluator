@@ -185,9 +185,17 @@ def create_postgresql_schema():
         status TEXT DEFAULT 'N',
         started_processing_at TIMESTAMP,
         completed_processing_at TIMESTAMP,
+        response_json TEXT,
         response_text TEXT,
-        error_message TEXT,
         response_time_ms INTEGER,
+        error_message TEXT,
+        overall_score REAL, -- Suitability score (0-100) for LLM readiness
+        -- Token metrics (for analyze_status response compatibility)
+        input_tokens INTEGER, -- Number of input tokens sent to the LLM
+        output_tokens INTEGER, -- Number of output tokens received from the LLM
+        time_taken_seconds REAL, -- Time taken for the LLM call in seconds
+        tokens_per_second REAL, -- Rate of tokens per second
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 

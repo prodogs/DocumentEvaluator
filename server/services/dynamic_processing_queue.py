@@ -11,8 +11,8 @@ import threading
 import logging
 from typing import List, Dict, Any
 from sqlalchemy.sql import func
-from server.models import LlmResponse, Document, LlmConfiguration, Prompt, Batch
-from server.database import Session
+from models import LlmResponse, Document, LlmConfiguration, Prompt, Batch
+from database import Session
 
 logger = logging.getLogger(__name__)
 
@@ -195,8 +195,8 @@ class DynamicProcessingQueue:
         import os
         import json
         import time
-        from server.services.client import rag_client, RequestMethod
-        from server.api.status_polling import polling_service
+        from services.client import rag_client, RequestMethod
+        from api.status_polling import polling_service
 
         session = Session()
         try:
@@ -230,7 +230,7 @@ class DynamicProcessingQueue:
             document = session.query(Document).filter_by(id=llm_response.document_id).first()
             batch_meta_data = None
             if document and document.batch_id:
-                from server.models import Batch
+                from models import Batch
                 batch = session.query(Batch).filter_by(id=document.batch_id).first()
                 if batch and batch.meta_data:
                     batch_meta_data = batch.meta_data

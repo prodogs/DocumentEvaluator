@@ -16,8 +16,8 @@ from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import base64
 
-from server.database import Session
-from server.models import Folder, Document, Doc
+from database import Session
+from models import Folder, Document, Doc
 from sqlalchemy import text
 
 # Configure logging
@@ -204,7 +204,7 @@ class FolderPreprocessingService:
 
     def _get_or_create_folder(self, folder_path: str, folder_name: str) -> int:
         """Get existing folder or create new one"""
-        from server.models import Folder
+        from models import Folder
 
         # Check if folder already exists
         existing_folder = self.session.query(Folder).filter(Folder.folder_path == folder_path).first()
@@ -229,7 +229,7 @@ class FolderPreprocessingService:
 
     def _update_folder_status(self, folder_id: int, status: str):
         """Update folder preprocessing status"""
-        from server.models import Folder
+        from models import Folder
 
         folder = self.session.query(Folder).filter(Folder.id == folder_id).first()
         if folder:
@@ -287,7 +287,7 @@ class FolderPreprocessingService:
 
     def _process_single_file(self, folder_id: int, file_info: Dict, results: Dict):
         """Process a single file: validate, create document record, store in docs"""
-        from server.models import Document, Doc
+        from models import Document, Doc
 
         # 1. Validate file
         is_valid, validation_reason = self._validate_file(file_info)
@@ -339,7 +339,7 @@ class FolderPreprocessingService:
         """Get folder preprocessing status and statistics"""
         session = Session()
         try:
-            from server.models import Folder, Document, Doc
+            from models import Folder, Document, Doc
             from sqlalchemy import func
 
             # Query folder with aggregated document statistics

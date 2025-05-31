@@ -18,8 +18,8 @@ import requests
 import uuid
 import pathlib
 
-from server.database import Session
-from server.models import Folder, LlmConfiguration, Prompt, LlmResponse, Document
+from database import Session
+from models import Folder, LlmConfiguration, Prompt, LlmResponse, Document
 from api.document_routes import register_document_routes, background_tasks
 from api.process_folder import process_folder
 from api.status_polling import polling_service

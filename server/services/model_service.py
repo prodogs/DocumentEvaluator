@@ -10,9 +10,9 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session as SQLSession, joinedload
 
-from server.database import Session
-from server.models import Model, ProviderModel, ModelAlias, LlmProvider
-from server.services.model_normalization_service import model_normalization_service
+from database import Session
+from models import Model, ProviderModel, ModelAlias, LlmProvider
+from services.model_normalization_service import model_normalization_service
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +133,38 @@ class ModelService:
             provider_models = session.query(ProviderModel).options(
                 joinedload(ProviderModel.model).joinedload(Model.aliases)
             ).filter(ProviderModel.provider_id == provider_id).all()
-            
+
             return [self._provider_model_to_dict(pm) for pm in provider_models]
+        finally:
+            session.close()
+
+    def get_providers_by_model(self, model_id: int) -> List[Dict[str, Any]]:
+        """Get all providers that support a specific model"""
+        session = Session()
+        try:
+            provider_models = session.query(ProviderModel).options(
+                joinedload(ProviderModel.provider)
+            ).filter(ProviderModel.model_id == model_id).all()
+
+            providers = []
+            for pm in provider_models:
+                if pm.provider:
+                    provider_dict = {
+                        'id': pm.provider.id,
+                        'name': pm.provider.name,
+                        'provider_type': pm.provider.provider_type,
+                        'default_base_url': pm.provider.default_base_url,
+                        'supports_model_discovery': pm.provider.supports_model_discovery,
+                        'auth_type': pm.provider.auth_type,
+                        'notes': pm.provider.notes,
+                        'created_at': pm.provider.created_at.isoformat() if pm.provider.created_at else None,
+                        'provider_model_name': pm.provider_model_name,
+                        'is_active': pm.is_active,
+                        'is_available': pm.is_available
+                    }
+                    providers.append(provider_dict)
+
+            return providers
         finally:
             session.close()
     

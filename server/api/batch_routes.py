@@ -11,9 +11,9 @@ Provides REST API endpoints for managing document processing batches:
 import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify
-from server.services.batch_service import batch_service
-from server.services.batch_archive_service import batch_archive_service
-from server.services.batch_cleanup_service import batch_cleanup_service
+from services.batch_service import batch_service
+from services.batch_archive_service import batch_archive_service
+from services.batch_cleanup_service import batch_cleanup_service
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ def register_batch_routes(app):
     def get_current_batch():
         """Get the currently processing batch"""
         try:
-            from server.services.batch_service import batch_service
+            from services.batch_service import batch_service
             current_batch = batch_service.get_current_batch()
 
             if not current_batch:
@@ -288,8 +288,8 @@ def register_batch_routes(app):
     def get_batch_llm_responses(batch_id):
         """Get all LLM responses for a specific batch"""
         try:
-            from server.database import Session
-            from server.models import Batch, LlmResponse, Document, Prompt, LlmConfiguration
+            from database import Session
+            from models import Batch, LlmResponse, Document, Prompt, LlmConfiguration
             from sqlalchemy.orm import joinedload
 
             session = Session()
@@ -386,8 +386,8 @@ def register_batch_routes(app):
     def get_batch_config_snapshot(batch_id):
         """Get the configuration snapshot for a specific batch"""
         try:
-            from server.database import Session
-            from server.models import Batch
+            from database import Session
+            from models import Batch
 
             session = Session()
             try:
@@ -559,5 +559,5 @@ def register_batch_routes(app):
     logger.info("Batch management routes registered")
 
 # Example usage in app_launcher.py:
-# from server.api.batch_routes import register_batch_routes
+# from api.batch_routes import register_batch_routes
 # register_batch_routes(app)

@@ -7,7 +7,7 @@ from typing import Dict, Optional, List
 from enum import Enum
 from dataclasses import dataclass, field
 
-from server.services.config import service_config, ServiceConfig
+from services.config import service_config, ServiceConfig
 
 logger = logging.getLogger(__name__)
 

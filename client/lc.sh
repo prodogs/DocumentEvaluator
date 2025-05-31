@@ -23,7 +23,7 @@ if [ ! -f "package.json" ]; then
 
     # Create a basic .env file
     echo "Creating .env file..."
-    echo "VITE_API_URL=http://localhost:5001" > .env
+    echo "VITE_API_BASE_URL=http://localhost:5001" > .env
 fi
 
 # Make sure dependencies are installed
@@ -33,8 +33,8 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Set the backend URL environment variable if not already set
-if [ -z "$VITE_API_URL" ]; then
-    export VITE_API_URL=http://localhost:5001
+if [ -z "$VITE_API_BASE_URL" ]; then
+    export VITE_API_BASE_URL=http://localhost:5001
 fi
 
 # Start the development server

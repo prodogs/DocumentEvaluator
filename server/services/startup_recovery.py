@@ -8,10 +8,10 @@ resumes monitoring them.
 
 import logging
 from typing import List, Dict, Any
-from server.database import Session
-from server.models import Document, LlmResponse
-from server.api.status_polling import polling_service
-from server.services.client import rag_client, RequestMethod
+from database import Session
+from models import Document, LlmResponse
+from api.status_polling import polling_service
+from services.client import rag_client, RequestMethod
 from sqlalchemy.sql import func
 
 logger = logging.getLogger(__name__)

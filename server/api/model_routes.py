@@ -253,3 +253,20 @@ def get_model_families():
             'success': False,
             'error': str(e)
         }), 500
+
+@model_bp.route('/api/models/<int:model_id>/providers', methods=['GET'])
+def get_model_providers(model_id: int):
+    """Get all providers that support a specific model"""
+    try:
+        providers = model_service.get_providers_by_model(model_id)
+        return jsonify({
+            'success': True,
+            'providers': providers,
+            'count': len(providers)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error getting providers for model {model_id}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
