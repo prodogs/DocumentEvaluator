@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import '../styles/analyze-documents.css';
+import '../styles/staging.css';
 
-const AnalyzeDocumentsManager = ({
+const StagingManager = ({
   batchName,
   setBatchName,
   batchMetaData,
@@ -17,13 +17,11 @@ const AnalyzeDocumentsManager = ({
   setSelectedFolders,
   currentBatch,
   isProcessing,
-  startFolderProcessing,
-  stopProcessing,
+  onSaveAnalysis,
+  onStageAnalysis,
   pauseBatch,
   resumeBatch,
-  batchActionLoading,
-  errors,
-  handleShowErrors
+  batchActionLoading
 }) => {
   const [stats, setStats] = useState({
     totalConnections: 0,
@@ -69,28 +67,30 @@ const AnalyzeDocumentsManager = ({
     }
   };
 
-  const canStartProcessing = selectedConnections.length > 0 &&
-                           selectedPrompts.length > 0 &&
-                           selectedFolders.length > 0 &&
-                           batchName.trim() &&
-                           !isProcessing;
+  const canSave = selectedConnections.length > 0 &&
+                  selectedPrompts.length > 0 &&
+                  selectedFolders.length > 0 &&
+                  batchName.trim() &&
+                  !isProcessing;
+
+  const canStage = canSave; // Same requirements for staging
 
   return (
-    <div className="analyze-documents-manager">
+    <div className="staging-manager">
       {/* Hero Section */}
-      <div className="analyze-hero">
+      <div className="staging-hero">
         <div className="hero-content">
           <h1 className="hero-title">
-            <span className="hero-icon">🔍</span>
-            Document Analysis
+            <span className="hero-icon">🎯</span>
+            Document Staging
           </h1>
           <p className="hero-subtitle">
-            Configure and execute intelligent document processing with AI models
+            Configure and stage document batches for intelligent processing
           </p>
         </div>
         
         {/* Stats Dashboard */}
-        <div className="analyze-stats">
+        <div className="staging-stats">
           <div className="stat-card configs">
             <div className="stat-icon">🔗</div>
             <div className="stat-content">
@@ -121,7 +121,7 @@ const AnalyzeDocumentsManager = ({
       </div>
 
       {/* Main Content */}
-      <div className="analyze-content">
+      <div className="staging-content">
         {/* Batch Configuration */}
         <div className="batch-config-section">
           <div className="config-card">
@@ -172,7 +172,7 @@ const AnalyzeDocumentsManager = ({
               {connections.length === 0 ? (
                 <div className="no-items">
                   <p>⚠️ No active connections found.</p>
-                  <p>Please go to the <strong>🔧 Models & Providers</strong> tab to add connections.</p>
+                  <p>Please go to the <strong>🤖 Models</strong> tab to add connections.</p>
                 </div>
               ) : (
                 connections.map(connection => (
@@ -205,7 +205,7 @@ const AnalyzeDocumentsManager = ({
               {prompts.length === 0 ? (
                 <div className="no-items">
                   <p>⚠️ No active prompts found.</p>
-                  <p>Please go to the <strong>⚙️ Configuration</strong> tab to add prompts.</p>
+                  <p>Please go to the <strong>📝 Prompts</strong> tab to add prompts.</p>
                 </div>
               ) : (
                 prompts.map(prompt => (
@@ -270,17 +270,24 @@ const AnalyzeDocumentsManager = ({
               <h4>Current Batch: {currentBatch.batch_name}</h4>
               <div className="batch-status">
                 <span className={`status-badge ${currentBatch.status.toLowerCase()}`}>
-                  {currentBatch.status === 'P' ? 'Processing' : 
-                   currentBatch.status === 'PA' ? 'Paused' : 
-                   currentBatch.status === 'C' ? 'Completed' : currentBatch.status}
+                  {currentBatch.status === 'SAVED' ? '💾 Saved' :
+                   currentBatch.status === 'READY_FOR_STAGING' ? '📋 Ready for Staging' :
+                   currentBatch.status === 'STAGING' ? '⚙️ Staging' :
+                   currentBatch.status === 'STAGED' ? '✅ Staged' :
+                   currentBatch.status === 'FAILED_STAGING' ? '❌ Staging Failed' :
+                   currentBatch.status === 'ANALYZING' ? '🔄 Analyzing' :
+                   currentBatch.status === 'COMPLETED' ? '✅ Completed' :
+                   currentBatch.status === 'P' ? '🔄 Processing' :
+                   currentBatch.status === 'PA' ? '⏸️ Paused' :
+                   currentBatch.status === 'C' ? '✅ Completed' : currentBatch.status}
                 </span>
                 <span className="batch-date">
                   Created: {new Date(currentBatch.created_at).toLocaleString()}
                 </span>
               </div>
-              
+
               <div className="batch-actions">
-                {currentBatch.status === 'P' && (
+                {(currentBatch.status === 'P' || currentBatch.status === 'ANALYZING') && (
                   <button
                     onClick={() => pauseBatch(currentBatch.id)}
                     disabled={batchActionLoading === 'pause'}
@@ -306,11 +313,19 @@ const AnalyzeDocumentsManager = ({
         {/* Control Panel */}
         <div className="control-panel">
           <button
-            onClick={startFolderProcessing}
-            disabled={!canStartProcessing}
-            className={`btn btn-primary btn-large ${canStartProcessing ? 'pulse' : ''}`}
+            onClick={onSaveAnalysis}
+            disabled={!canSave}
+            className={`btn btn-secondary btn-large ${canSave ? 'pulse' : ''}`}
           >
-            🚀 Start Document Analysis
+            💾 Save Analysis
+          </button>
+
+          <button
+            onClick={onStageAnalysis}
+            disabled={!canStage}
+            className={`btn btn-primary btn-large ${canStage ? 'pulse' : ''}`}
+          >
+            🎯 Stage Analysis
           </button>
         </div>
       </div>
@@ -318,4 +333,4 @@ const AnalyzeDocumentsManager = ({
   );
 };
 
-export default AnalyzeDocumentsManager;
+export default StagingManager;

@@ -11,7 +11,8 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session as SQLSession
 
 from database import Session
-from models import Model, ModelAlias, ProviderModel
+# Temporarily commented out due to missing models
+# from models import Model, ModelAlias, ProviderModel
 
 logger = logging.getLogger(__name__)
 

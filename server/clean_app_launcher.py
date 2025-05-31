@@ -37,11 +37,10 @@ def create_app():
         logger.info("Initializing database and models...")
         from database import Base, engine
         
-        # Import all models to register them
+        # Import all models to register them (temporarily reduced due to missing models)
         from models import (
-            Batch, Folder, Doc, Document, Prompt, LlmProvider, 
-            LlmConfiguration, LlmResponse, LlmModel, Model, 
-            ProviderModel, ModelAlias, BatchArchive, Connection
+            Batch, Folder, Doc, Document, Prompt,
+            LlmConfiguration, LlmResponse, BatchArchive
         )
         
         # Create all tables

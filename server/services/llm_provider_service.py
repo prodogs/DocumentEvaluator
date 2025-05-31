@@ -182,12 +182,28 @@ class LlmProviderService:
             model = session.query(LlmModel).filter(LlmModel.id == model_id).first()
             if not model:
                 return False
-            
+
             model.is_active = is_active
             model.last_updated = datetime.utcnow()
             session.commit()
-            
+
             logger.info(f"Model {model.model_name} {'activated' if is_active else 'deactivated'}")
+            return True
+        finally:
+            session.close()
+
+    def toggle_provider_status(self, provider_id: int, is_active: bool) -> bool:
+        """Toggle the active status of a provider"""
+        session = Session()
+        try:
+            provider = session.query(LlmProvider).filter(LlmProvider.id == provider_id).first()
+            if not provider:
+                return False
+
+            provider.is_active = is_active
+            session.commit()
+
+            logger.info(f"Provider {provider.name} {'activated' if is_active else 'deactivated'}")
             return True
         finally:
             session.close()
@@ -267,6 +283,7 @@ class LlmProviderService:
             'default_base_url': provider.default_base_url,
             'supports_model_discovery': provider.supports_model_discovery,
             'auth_type': provider.auth_type,
+            'is_active': provider.is_active,
             'notes': provider.notes,
             'created_at': provider.created_at.isoformat() if provider.created_at else None
         }

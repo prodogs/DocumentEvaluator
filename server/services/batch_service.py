@@ -300,13 +300,14 @@ class BatchService:
             if not batch:
                 return {'success': False, 'error': f'Batch {batch_id} not found'}
 
-            if batch.status != 'PREPARED':
-                return {'success': False, 'error': f'Batch {batch_id} is not in PREPARED status (current: {batch.status})'}
+            # Allow running from PREPARED (legacy) or STAGED (new staging workflow)
+            if batch.status not in ['PREPARED', 'STAGED']:
+                return {'success': False, 'error': f'Batch {batch_id} is not in PREPARED or STAGED status (current: {batch.status})'}
 
             logger.info(f"🚀 STAGE 2: Starting execution of batch #{batch.batch_number}")
 
-            # Update batch status to PROCESSING
-            batch.status = 'PROCESSING'
+            # Update batch status to ANALYZING (new) or PROCESSING (legacy)
+            batch.status = 'ANALYZING' if batch.status == 'STAGED' else 'PROCESSING'
             batch.started_at = func.now()
 
             # Get all documents in this batch
@@ -321,7 +322,7 @@ class BatchService:
             logger.info(f"📄 Found {len(documents)} documents with {len(responses_to_process)} responses to process")
 
             # Start processing responses (similar to existing process_folder logic)
-            from api.process_folder import analyze_document_with_llm
+            from api.document_routes import analyze_document_with_llm
             import asyncio
             import threading
 
@@ -961,15 +962,19 @@ class BatchService:
                 if total_responses > 0:
                     completion_percentage = (completed_responses / total_responses) * 100
                     if completion_percentage >= 100:
-                        batch.status = 'C'  # Completed
+                        batch.status = 'COMPLETED'  # Use new COMPLETED status
                         batch.completed_at = func.now()
                     elif completion_percentage > 0:
-                        batch.status = 'P'  # Processing
+                        # Keep current status if analyzing, otherwise use legacy processing
+                        if batch.status not in ['ANALYZING']:
+                            batch.status = 'P'  # Processing (legacy)
                     else:
-                        batch.status = 'P'  # Processing (just started)
+                        # Keep current status if analyzing, otherwise use legacy processing
+                        if batch.status not in ['ANALYZING']:
+                            batch.status = 'P'  # Processing (just started, legacy)
                 else:
                     # No responses means no documents to process - mark as completed
-                    batch.status = 'C'  # Completed
+                    batch.status = 'COMPLETED'  # Use new COMPLETED status
                     batch.completed_at = func.now()
 
             session.commit()

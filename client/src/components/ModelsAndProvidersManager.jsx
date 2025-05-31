@@ -43,7 +43,7 @@ const ModelsAndProvidersManager = ({ onProvidersChange }) => {
         totalModels: models.length,
         activeModels: models.filter(m => m.is_globally_active).length,
         totalProviders: providers.length,
-        activeProviders: providers.length, // All providers are considered active for now
+        activeProviders: providers.filter(p => p.is_active).length,
         totalConnections: connections.length,
         activeConnections: connections.filter(c => c.is_active).length
       });

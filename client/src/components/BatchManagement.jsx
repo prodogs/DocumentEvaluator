@@ -15,6 +15,10 @@ const BatchManagement = ({ onNavigateBack }) => {
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
 
+  // Progress tracking state
+  const [progressPolling, setProgressPolling] = useState(null);
+  const [progressMessage, setProgressMessage] = useState('');
+
   // Detailed view modal state
   const [selectedResponseDetail, setSelectedResponseDetail] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -27,6 +31,15 @@ const BatchManagement = ({ onNavigateBack }) => {
   useEffect(() => {
     loadBatches();
   }, []);
+
+  // Cleanup progress polling on unmount
+  useEffect(() => {
+    return () => {
+      if (progressPolling) {
+        clearInterval(progressPolling);
+      }
+    };
+  }, [progressPolling]);
 
   // Resizer functionality
   useEffect(() => {
@@ -228,18 +241,212 @@ const BatchManagement = ({ onNavigateBack }) => {
     }
   };
 
+  const handleReprocessStaging = async (batchId, batchName) => {
+    if (!window.confirm(`Are you sure you want to reprocess staging for batch "${batchName}"?`)) {
+      return;
+    }
+
+    try {
+      setActionLoading('reprocess-staging');
+      setProgressMessage(`⚙️ Starting staging for batch "${batchName}"...`);
+
+      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/reprocess-staging`);
+
+      if (response.data.success) {
+        setError(null);
+        setProgressMessage(`✅ Staging completed successfully! Batch "${batchName}" is now ready for analysis.`);
+
+        // Refresh batch details and list immediately
+        if (selectedBatch && selectedBatch.id === batchId) {
+          await loadBatchDetails(batchId);
+        }
+        await loadBatches();
+
+        // Start progress polling to monitor status changes
+        startProgressPolling(batchId);
+
+        // Force an additional refresh after a short delay to ensure UI consistency
+        setTimeout(async () => {
+          await loadBatches();
+        }, 1000);
+
+        // Clear progress message after 3 seconds
+        setTimeout(() => {
+          setProgressMessage('');
+        }, 3000);
+      } else {
+        setError(response.data.error || 'Failed to reprocess staging');
+        setProgressMessage('');
+      }
+    } catch (error) {
+      console.error('Error reprocessing staging:', error);
+      setError('Failed to reprocess staging');
+      setProgressMessage('');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRunAnalysis = async (batchId, batchName) => {
+    if (!window.confirm(`Are you sure you want to start analysis for batch "${batchName}"?`)) {
+      return;
+    }
+
+    try {
+      setActionLoading('run-analysis');
+      setProgressMessage(`🚀 Starting analysis for batch "${batchName}"...`);
+
+      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/run`);
+
+      if (response.data.success) {
+        setError(null);
+        setProgressMessage(`✅ Analysis started successfully! Processing ${batchName}...`);
+
+        // Start progress polling for this batch
+        startProgressPolling(batchId);
+
+        // Refresh batch details
+        if (selectedBatch && selectedBatch.id === batchId) {
+          await loadBatchDetails(batchId);
+        }
+        await loadBatches();
+      } else {
+        setError(response.data.error || 'Failed to start analysis');
+        setProgressMessage('');
+      }
+    } catch (error) {
+      console.error('Error starting analysis:', error);
+      setError('Failed to start analysis');
+      setProgressMessage('');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRerunAnalysis = async (batchId, batchName) => {
+    if (!window.confirm(`Are you sure you want to rerun analysis for batch "${batchName}"? This will reset all LLM responses.`)) {
+      return;
+    }
+
+    try {
+      setActionLoading('rerun-analysis');
+      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/rerun`);
+
+      if (response.data.success) {
+        setError(null);
+        // Refresh batch details
+        if (selectedBatch && selectedBatch.id === batchId) {
+          await loadBatchDetails(batchId);
+        }
+        await loadBatches();
+      } else {
+        setError(response.data.error || 'Failed to rerun analysis');
+      }
+    } catch (error) {
+      console.error('Error rerunning analysis:', error);
+      setError('Failed to rerun analysis');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return 'N/A';
     return new Date(timestamp).toLocaleString();
   };
 
+  // Progress polling functions
+  const startProgressPolling = (batchId) => {
+    // Clear any existing polling
+    if (progressPolling) {
+      clearInterval(progressPolling);
+    }
+
+    // Start new polling interval
+    const intervalId = setInterval(async () => {
+      try {
+        // Refresh batch details to get updated progress
+        if (selectedBatch && selectedBatch.id === batchId) {
+          await loadBatchDetails(batchId);
+        }
+        await loadBatches();
+
+        // Check if batch status has changed to a final state
+        const currentBatch = selectedBatch && selectedBatch.id === batchId ?
+          await getBatchStatus(batchId) : null;
+
+        if (currentBatch) {
+          // Check for completion states
+          if (currentBatch.status === 'COMPLETED' || currentBatch.status === 'C') {
+            setProgressMessage(`🎉 Analysis completed for batch "${currentBatch.batch_name}"!`);
+            clearInterval(intervalId);
+            setProgressPolling(null);
+
+            // Clear message after 5 seconds
+            setTimeout(() => {
+              setProgressMessage('');
+            }, 5000);
+          }
+          // Check for staging completion
+          else if (currentBatch.status === 'STAGED') {
+            setProgressMessage(`✅ Staging completed! Batch "${currentBatch.batch_name}" is ready for analysis.`);
+            clearInterval(intervalId);
+            setProgressPolling(null);
+
+            // Force refresh of batch list to ensure UI is updated
+            await loadBatches();
+
+            // Clear message after 3 seconds
+            setTimeout(() => {
+              setProgressMessage('');
+            }, 3000);
+          }
+          // Check for staging failure
+          else if (currentBatch.status === 'FAILED_STAGING') {
+            setProgressMessage(`❌ Staging failed for batch "${currentBatch.batch_name}".`);
+            clearInterval(intervalId);
+            setProgressPolling(null);
+
+            // Clear message after 5 seconds
+            setTimeout(() => {
+              setProgressMessage('');
+            }, 5000);
+          }
+        }
+      } catch (error) {
+        console.error('Error polling progress:', error);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    setProgressPolling(intervalId);
+  };
+
+  const getBatchStatus = async (batchId) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/batches/${batchId}`);
+      return response.data.batch;
+    } catch (error) {
+      console.error('Error getting batch status:', error);
+      return null;
+    }
+  };
+
   const getStatusDisplay = (status) => {
     const statusMap = {
+      // New staging statuses
+      'SAVED': { text: '💾 Saved', class: 'saved' },
+      'READY_FOR_STAGING': { text: '📋 Ready for Staging', class: 'ready-for-staging' },
+      'STAGING': { text: '⚙️ Staging', class: 'staging' },
+      'STAGED': { text: '✅ Staged', class: 'staged' },
+      'FAILED_STAGING': { text: '❌ Staging Failed', class: 'failed-staging' },
+      'ANALYZING': { text: '🔄 Analyzing', class: 'analyzing' },
+      'COMPLETED': { text: '✅ Completed', class: 'completed' },
+
+      // Legacy statuses for backward compatibility
       'PREPARED': { text: '📋 Prepared', class: 'prepared' },
       'PROCESSING': { text: '🔄 Processing', class: 'processing' },
       'P': { text: '🔄 Processing', class: 'processing' },
       'PA': { text: '⏸️ Paused', class: 'paused' },
-      'COMPLETED': { text: '✅ Completed', class: 'completed' },
       'C': { text: '✅ Completed', class: 'completed' },
       'FAILED': { text: '❌ Failed', class: 'failed' },
       'F': { text: '❌ Failed', class: 'failed' }
@@ -381,9 +588,13 @@ const BatchManagement = ({ onNavigateBack }) => {
               onPauseBatch={handlePauseBatch}
               onResumeBatch={handleResumeBatch}
               onDeleteBatch={handleDeleteBatch}
+              onReprocessStaging={handleReprocessStaging}
+              onRunAnalysis={handleRunAnalysis}
+              onRerunAnalysis={handleRerunAnalysis}
               onLoadMoreResponses={handleLoadMoreResponses}
               onResponseDoubleClick={handleResponseDoubleClick}
               actionLoading={actionLoading}
+              progressMessage={progressMessage}
               formatTimestamp={formatTimestamp}
               getStatusDisplay={getStatusDisplay}
             />
@@ -413,9 +624,13 @@ const BatchDetails = ({
   onPauseBatch,
   onResumeBatch,
   onDeleteBatch,
+  onReprocessStaging,
+  onRunAnalysis,
+  onRerunAnalysis,
   onLoadMoreResponses,
   onResponseDoubleClick,
   actionLoading,
+  progressMessage,
   formatTimestamp,
   getStatusDisplay
 }) => {
@@ -445,6 +660,38 @@ const BatchDetails = ({
           </div>
 
           <div className="summary-actions">
+            {/* Staging Lifecycle Actions */}
+            {(batch.status === 'SAVED' || batch.status === 'FAILED_STAGING') && (
+              <button
+                onClick={() => onReprocessStaging(batch.id, batch.batch_name)}
+                disabled={actionLoading === 'reprocess-staging'}
+                className="btn btn-primary btn-sm"
+              >
+                {actionLoading === 'reprocess-staging' ? '⏳' : '⚙️'} {batch.status === 'SAVED' ? 'Stage' : 'Restage'}
+              </button>
+            )}
+
+            {batch.status === 'STAGED' && (
+              <button
+                onClick={() => onRunAnalysis(batch.id, batch.batch_name)}
+                disabled={actionLoading === 'run-analysis'}
+                className="btn btn-success btn-sm"
+              >
+                {actionLoading === 'run-analysis' ? '⏳' : '▶️'} Run Analysis
+              </button>
+            )}
+
+            {batch.status === 'COMPLETED' && (
+              <button
+                onClick={() => onRerunAnalysis(batch.id, batch.batch_name)}
+                disabled={actionLoading === 'rerun-analysis'}
+                className="btn btn-secondary btn-sm"
+              >
+                {actionLoading === 'rerun-analysis' ? '⏳' : '🔄'} Rerun Analysis
+              </button>
+            )}
+
+            {/* Legacy Actions for backward compatibility */}
             {batch.status === 'PREPARED' && (
               <button
                 onClick={() => onRunBatch(batch.id)}
@@ -455,7 +702,7 @@ const BatchDetails = ({
               </button>
             )}
 
-            {(batch.status === 'PROCESSING' || batch.status === 'P') && (
+            {(batch.status === 'PROCESSING' || batch.status === 'P' || batch.status === 'ANALYZING') && (
               <button
                 onClick={() => onPauseBatch(batch.id)}
                 disabled={actionLoading === 'pause'}
@@ -484,6 +731,13 @@ const BatchDetails = ({
             </button>
           </div>
         </div>
+
+        {/* Progress Message */}
+        {progressMessage && (
+          <div className="progress-message">
+            {progressMessage}
+          </div>
+        )}
 
         {/* Progress Bar */}
         <div className="summary-progress">

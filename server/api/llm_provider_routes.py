@@ -230,20 +230,45 @@ def get_provider_models(provider_id: int):
             'error': str(e)
         }), 500
 
+@llm_provider_bp.route('/api/llm-providers/<int:provider_id>/toggle', methods=['PUT'])
+def toggle_provider_status(provider_id: int):
+    """Toggle the active status of a provider"""
+    try:
+        data = request.get_json() or {}
+        is_active = data.get('is_active', False)
+
+        success = llm_provider_service.toggle_provider_status(provider_id, is_active)
+        if not success:
+            return jsonify({
+                'success': False,
+                'error': 'Provider not found'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'message': f'Provider {"activated" if is_active else "deactivated"} successfully'
+        }), 200
+    except Exception as e:
+        logger.error(f"Error toggling provider {provider_id} status: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @llm_provider_bp.route('/api/llm-providers/<int:provider_id>/models/<int:model_id>/toggle', methods=['PUT'])
 def toggle_model_status(provider_id: int, model_id: int):
     """Toggle the active status of a model"""
     try:
         data = request.get_json() or {}
         is_active = data.get('is_active', False)
-        
+
         success = llm_provider_service.toggle_model_status(model_id, is_active)
         if not success:
             return jsonify({
                 'success': False,
                 'error': 'Model not found'
             }), 404
-        
+
         return jsonify({
             'success': True,
             'message': f'Model {"activated" if is_active else "deactivated"} successfully'

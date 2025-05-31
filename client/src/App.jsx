@@ -4,12 +4,12 @@ import './App.css';
 import './styles/management.css';
 import './styles/batch-dashboard.css';
 import './styles/models-providers.css';
-import './styles/analyze-documents.css';
+import './styles/staging.css';
 import './styles/configuration.css';
 import './styles/folders.css';
 
 import ModelsAndProvidersManager from './components/ModelsAndProvidersManager';
-import AnalyzeDocumentsManager from './components/AnalyzeDocumentsManager';
+import StagingManager from './components/StagingManager';
 import ConfigurationManager from './components/ConfigurationManager';
 import FoldersManager from './components/FoldersManager';
 import PromptManager from './components/PromptManager';
@@ -101,13 +101,26 @@ function App() {
     }
   }, [activeTab]);
 
+  // Load staging data when staging tab is selected
+  useEffect(() => {
+    if (activeTab === 'process') {
+      console.log('Staging tab selected - loading connections, prompts, folders, and current batch');
+      loadConnections();
+      loadPrompts();
+      loadFolders();
+      loadCurrentBatch();
+    }
+  }, [activeTab]);
+
   const loadConnections = async () => {
     try {
       console.log('Loading connections from:', `${API_BASE_URL}/api/connections`);
       const response = await axios.get(`${API_BASE_URL}/api/connections`);
       console.log('Connections response:', response.data);
+
       // Only show active connections
       const activeConnections = (response.data.connections || []).filter(connection => connection.is_active === true);
+      console.log('Filtered active connections:', activeConnections);
       setConnections(activeConnections);
       // Don't auto-select - let user choose for each batch
       setSelectedConnections([]);
@@ -201,6 +214,200 @@ function App() {
       setBatches(response.data.batches || []);
     } catch (error) {
       console.error('Error loading batches:', error);
+    }
+  };
+
+  const resetBatchConfiguration = () => {
+    // Reset all batch configuration fields
+    setBatchName('');
+    setBatchMetaData('');
+    setSelectedConnections([]);
+    setSelectedPrompts([]);
+    setSelectedFolders([]);
+  };
+
+  const saveAnalysis = async () => {
+    // Enhanced validation with better error messages
+    if (connections.length === 0) {
+      alert('No active connections available. Please go to the Models & Providers tab to add and activate connections.');
+      return;
+    }
+
+    if (selectedConnections.length === 0) {
+      alert('Please select at least one connection for this batch.');
+      return;
+    }
+
+    if (prompts.length === 0) {
+      alert('No active prompts available. Please go to the Prompts tab to add and activate prompts.');
+      return;
+    }
+
+    if (selectedPrompts.length === 0) {
+      alert('Please select at least one prompt for this batch.');
+      return;
+    }
+
+    if (folders.length === 0) {
+      alert('No active folders available. Please go to the Folders tab to add and activate folders.');
+      return;
+    }
+
+    if (selectedFolders.length === 0) {
+      alert('Please select at least one folder for this batch.');
+      return;
+    }
+
+    if (!batchName.trim()) {
+      alert('Please enter a batch name for this submission.');
+      return;
+    }
+
+    // Validate JSON metadata if provided
+    let parsedMetaData = null;
+    if (batchMetaData.trim()) {
+      try {
+        parsedMetaData = JSON.parse(batchMetaData.trim());
+      } catch (error) {
+        alert('Invalid JSON in metadata field. Please check your JSON syntax.');
+        return;
+      }
+    }
+
+    setMessage('Saving analysis configuration...');
+
+    try {
+      const requestBody = {
+        batch_name: batchName.trim(),
+        folder_ids: selectedFolders,
+        llm_config_ids: selectedConnections, // ✅ FIX: Send selected connections (LLM configs)
+        prompt_ids: selectedPrompts, // ✅ FIX: Send selected prompts
+        action: 'save' // Indicate this is a save operation
+      };
+
+      // Add meta_data if provided
+      if (parsedMetaData) {
+        requestBody.meta_data = parsedMetaData;
+      }
+
+      const response = await axios.post(`${API_BASE_URL}/api/batches/save`, requestBody, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      // Show success message and reset configuration
+      setMessage(`✅ Analysis saved successfully: ${response.data.message}`);
+
+      // Reset batch configuration after successful save
+      setTimeout(() => {
+        resetBatchConfiguration();
+        setMessage('✅ Analysis saved! Configuration has been reset for your next batch.');
+      }, 1500);
+
+      loadCurrentBatch(); // Refresh current batch info
+    } catch (error) {
+      console.error('Error saving analysis:', error);
+      setMessage(`❌ Error: ${error.response?.data?.message || error.message}`);
+    }
+  };
+
+  const stageAnalysis = async () => {
+    // Enhanced validation with better error messages
+    if (connections.length === 0) {
+      alert('No active connections available. Please go to the Models & Providers tab to add and activate connections.');
+      return;
+    }
+
+    if (selectedConnections.length === 0) {
+      alert('Please select at least one connection for this batch.');
+      return;
+    }
+
+    if (prompts.length === 0) {
+      alert('No active prompts available. Please go to the Prompts tab to add and activate prompts.');
+      return;
+    }
+
+    if (selectedPrompts.length === 0) {
+      alert('Please select at least one prompt for this batch.');
+      return;
+    }
+
+    if (folders.length === 0) {
+      alert('No active folders available. Please go to the Folders tab to add and activate folders.');
+      return;
+    }
+
+    if (selectedFolders.length === 0) {
+      alert('Please select at least one folder for this batch.');
+      return;
+    }
+
+    if (!batchName.trim()) {
+      alert('Please enter a batch name for this submission.');
+      return;
+    }
+
+    // Validate JSON metadata if provided
+    let parsedMetaData = null;
+    if (batchMetaData.trim()) {
+      try {
+        parsedMetaData = JSON.parse(batchMetaData.trim());
+      } catch (error) {
+        alert('Invalid JSON in metadata field. Please check your JSON syntax.');
+        return;
+      }
+    }
+
+    setIsProcessing(true);
+    setMessage('Starting staging process...');
+
+    try {
+      const requestBody = {
+        batch_name: batchName.trim(),
+        folder_ids: selectedFolders,
+        llm_config_ids: selectedConnections, // ✅ FIX: Send selected connections (LLM configs)
+        prompt_ids: selectedPrompts, // ✅ FIX: Send selected prompts
+        action: 'stage' // Indicate this is a stage operation
+      };
+
+      // Add meta_data if provided
+      if (parsedMetaData) {
+        requestBody.meta_data = parsedMetaData;
+      }
+
+      const response = await axios.post(`${API_BASE_URL}/api/batches/stage`, requestBody, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      // Show success message and reset configuration
+      setMessage(`✅ Staging started successfully: ${response.data.message}`);
+      setTotalDocuments(response.data.totalFiles || 0);
+
+      // Reset batch configuration after successful staging
+      setTimeout(() => {
+        resetBatchConfiguration();
+        setMessage('✅ Staging started! Configuration has been reset for your next batch.');
+      }, 2000);
+
+      // Ensure task_id is properly handled - don't set if null or "null"
+      const taskId = response.data.task_id;
+      if (taskId && taskId !== 'null' && taskId !== null) {
+        setTaskId(taskId);
+        startPolling();
+      } else {
+        console.log('No valid task ID returned from server, not starting polling');
+        setTaskId(null);
+        setIsProcessing(false);
+      }
+      loadCurrentBatch(); // Refresh current batch info
+    } catch (error) {
+      console.error('Error staging analysis:', error);
+      setMessage(`❌ Error: ${error.response?.data?.message || error.message}`);
+      setIsProcessing(false);
     }
   };
 
@@ -515,7 +722,7 @@ function App() {
               className={activeTab === 'process' ? 'tab active' : 'tab'}
               onClick={() => handleTabChange('process')}
             >
-              🔍 Analyze Documents
+              🎯 Staging
             </button>
             <button
               className={activeTab === 'config' ? 'tab active' : 'tab'}
@@ -548,7 +755,7 @@ function App() {
           )}
 
           {activeTab === 'process' && (
-            <AnalyzeDocumentsManager
+            <StagingManager
               batchName={batchName}
               setBatchName={setBatchName}
               batchMetaData={batchMetaData}
@@ -564,13 +771,11 @@ function App() {
               setSelectedFolders={setSelectedFolders}
               currentBatch={currentBatch}
               isProcessing={isProcessing}
-              startFolderProcessing={startFolderProcessing}
-              stopProcessing={stopProcessing}
+              onSaveAnalysis={saveAnalysis}
+              onStageAnalysis={stageAnalysis}
               pauseBatch={pauseBatch}
               resumeBatch={resumeBatch}
               batchActionLoading={batchActionLoading}
-              errors={errors}
-              handleShowErrors={handleShowErrors}
             />
           )}
 

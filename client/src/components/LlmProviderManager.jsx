@@ -171,14 +171,14 @@ const LlmProviderManager = ({ onProvidersChange }) => {
   const handleDiscoverModels = async (provider) => {
     try {
       setDiscoveringModels(provider.id);
-      
+
       // Get default config for the provider
       const configResponse = await axios.get(`${API_BASE_URL}/api/llm-providers/${provider.id}/default-config`);
       const defaultConfig = configResponse.data.default_config;
-      
+
       // Discover models
       const response = await axios.post(`${API_BASE_URL}/api/llm-providers/${provider.id}/discover-models`, defaultConfig);
-      
+
       if (response.data.success) {
         setMessage(`✅ Discovered ${response.data.count} models for ${provider.name}`);
         loadProviderModels(provider.id);
@@ -190,6 +190,29 @@ const LlmProviderManager = ({ onProvidersChange }) => {
       setMessage(`❌ ${provider.name}: ${error.response?.data?.error || error.message}`);
     } finally {
       setDiscoveringModels(null);
+    }
+  };
+
+  const handleToggleProviderStatus = async (provider) => {
+    try {
+      const newStatus = !provider.is_active;
+      const response = await axios.put(`${API_BASE_URL}/api/llm-providers/${provider.id}/toggle`, {
+        is_active: newStatus
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.data.success) {
+        setMessage(`✅ Provider ${provider.name} ${newStatus ? 'activated' : 'deactivated'} successfully`);
+        loadProviders(); // Reload to get updated status
+      } else {
+        setMessage(`❌ Failed to ${newStatus ? 'activate' : 'deactivate'} provider: ${response.data.error}`);
+      }
+    } catch (error) {
+      console.error('Error toggling provider status:', error);
+      setMessage(`❌ Toggle failed: ${error.response?.data?.error || error.message}`);
     }
   };
 
@@ -404,9 +427,14 @@ const LlmProviderManager = ({ onProvidersChange }) => {
               const isExpanded = expandedProviders[provider.id];
 
               return (
-                <div key={provider.id} className="provider-card">
+                <div key={provider.id} className={`provider-card ${provider.is_active ? 'active' : 'inactive'}`}>
                   <div className="provider-header">
-                    <h5>{provider.name}</h5>
+                    <h5>
+                      {provider.name}
+                      <span className={`status-badge ${provider.is_active ? 'active' : 'inactive'}`}>
+                        {provider.is_active ? '✅ Active' : '❌ Inactive'}
+                      </span>
+                    </h5>
                     <div className="provider-actions">
                       <button
                         onClick={() => handleTestConnection(provider)}
@@ -434,6 +462,15 @@ const LlmProviderManager = ({ onProvidersChange }) => {
                         title={isExpanded ? 'Collapse' : 'Expand'}
                       >
                         {isExpanded ? '🔼' : '🔽'}
+                      </button>
+
+                      <button
+                        onClick={() => handleToggleProviderStatus(provider)}
+                        className={`btn btn-sm ${provider.is_active ? 'btn-warning' : 'btn-success'}`}
+                        disabled={loading}
+                        title={provider.is_active ? 'Deactivate Provider' : 'Activate Provider'}
+                      >
+                        {provider.is_active ? '🔴' : '🟢'}
                       </button>
 
                       <button

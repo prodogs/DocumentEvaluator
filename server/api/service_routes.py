@@ -763,18 +763,21 @@ def list_llm_configurations():
     """List all LLM configurations with their active status"""
     try:
         session = Session()
-        configs = session.query(LlmConfiguration).all()
+        # Use raw SQL to avoid schema mismatch issues
+        from sqlalchemy import text
+        configs_result = session.execute(text("SELECT id, llm_name, base_url, model_name, provider_type, port_no, active FROM llm_configurations"))
+        configs = configs_result.fetchall()
 
         config_list = []
         for config in configs:
             config_list.append({
-                'id': config.id,
-                'llm_name': config.llm_name,
-                'base_url': config.base_url,
-                'model_name': config.model_name,
-                'provider_type': config.provider_type,
-                'port_no': config.port_no,
-                'active': bool(config.active)
+                'id': config[0],
+                'llm_name': config[1],
+                'base_url': config[2],
+                'model_name': config[3],
+                'provider_type': config[4],
+                'port_no': config[5],
+                'active': bool(config[6])
             })
 
         session.close()

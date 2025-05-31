@@ -97,12 +97,34 @@ class ConnectionService:
             if not provider_row:
                 raise ValueError(f"Provider with ID {connection_data['provider_id']} not found")
 
-            # Auto-populate base_url from provider if not provided
+            # Auto-populate base_url and port from provider if not provided
             if not connection_data.get('base_url') and provider_row.default_base_url:
-                connection_data['base_url'] = provider_row.default_base_url
+                try:
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(provider_row.default_base_url)
 
-            # Auto-populate port from base_url if not provided
-            if not connection_data.get('port_no') and connection_data.get('base_url'):
+                    # Extract base URL without port
+                    if parsed_url.port:
+                        # Remove port from URL for base_url field
+                        connection_data['base_url'] = f"{parsed_url.scheme}://{parsed_url.hostname}"
+                        # Set port_no from the parsed URL
+                        if not connection_data.get('port_no'):
+                            connection_data['port_no'] = parsed_url.port
+                    else:
+                        # No port in URL, use as-is
+                        connection_data['base_url'] = provider_row.default_base_url
+                        # Set default ports only if no port specified in URL
+                        if not connection_data.get('port_no'):
+                            if parsed_url.scheme == 'https':
+                                connection_data['port_no'] = 443
+                            elif parsed_url.scheme == 'http':
+                                connection_data['port_no'] = 80
+                except:
+                    # If URL parsing fails, use the default_base_url as-is
+                    connection_data['base_url'] = provider_row.default_base_url
+
+            # Auto-populate port from base_url if still not provided
+            elif not connection_data.get('port_no') and connection_data.get('base_url'):
                 try:
                     from urllib.parse import urlparse
                     parsed_url = urlparse(connection_data['base_url'])
