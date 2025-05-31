@@ -5,6 +5,7 @@ from database import Base
 
 class Batch(Base):
     __tablename__ = 'batches'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     batch_number = Column(Integer, unique=True, nullable=False)
     batch_name = Column(Text, nullable=True)  # User-friendly name
@@ -24,6 +25,7 @@ class Batch(Base):
 
 class Folder(Base):
     __tablename__ = 'folders'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     folder_path = Column(Text, unique=True, nullable=False)
     folder_name = Column(Text)
@@ -36,6 +38,7 @@ class Folder(Base):
 class Doc(Base):
     """Table to store encoded document content"""
     __tablename__ = 'docs'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)  # Link to document
     content = Column(LargeBinary, nullable=False)  # Base64 encoded document content
@@ -50,6 +53,7 @@ class Doc(Base):
 
 class Document(Base):
     __tablename__ = 'documents'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     filepath = Column(Text, unique=True, nullable=False)
     filename = Column(Text, nullable=False)
@@ -67,6 +71,7 @@ class Document(Base):
 
 class Prompt(Base):
     __tablename__ = 'prompts'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     prompt_text = Column(Text, unique=True, nullable=False)
     description = Column(Text)
@@ -76,6 +81,7 @@ class Prompt(Base):
 
 class LlmConfiguration(Base):
     __tablename__ = 'llm_configurations'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     llm_name = Column(Text, unique=True, nullable=False)
     base_url = Column(Text)
@@ -89,6 +95,7 @@ class LlmConfiguration(Base):
 
 class LlmResponse(Base):
     __tablename__ = 'llm_responses'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
     prompt_id = Column(Integer, ForeignKey('prompts.id'), nullable=False)
@@ -111,6 +118,7 @@ class LlmResponse(Base):
 
 class BatchArchive(Base):
     __tablename__ = 'batch_archive'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
     original_batch_id = Column(Integer, nullable=False)  # Original batch ID before deletion
     batch_number = Column(Integer, nullable=False)  # Original batch number

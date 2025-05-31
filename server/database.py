@@ -20,38 +20,17 @@ POSTGRESQL_URL = "postgresql://postgres:prodogs03@tablemini.local:5432/doc_eval"
 SQLITE_URL = "sqlite:///llm_evaluation.db"
 
 def create_database_engine():
-    """Create database engine with PostgreSQL primary and SQLite fallback"""
-    try:
-        # Try PostgreSQL first
-        logger.info("Attempting to connect to PostgreSQL database...")
-        engine = create_engine(
-            POSTGRESQL_URL,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-            echo=False  # Set to True for SQL debugging
-        )
+    """Create database engine - using SQLite due to PostgreSQL I/O error"""
+    # Temporarily force SQLite usage due to PostgreSQL I/O error
+    logger.info("Using SQLite database (PostgreSQL temporarily disabled)...")
 
-        # Test the connection
-        with engine.connect() as conn:
-            conn.execute("SELECT 1")
+    engine = create_engine(
+        SQLITE_URL,
+        echo=False  # Set to True for SQL debugging
+    )
 
-        logger.info("Successfully connected to PostgreSQL database")
-        return engine
-
-    except Exception as e:
-        logger.warning(f"PostgreSQL connection failed: {e}")
-        logger.info("Falling back to SQLite database...")
-
-        # Fallback to SQLite
-        engine = create_engine(
-            SQLITE_URL,
-            echo=False  # Set to True for SQL debugging
-        )
-
-        logger.info("Successfully connected to SQLite database")
-        return engine
+    logger.info("Successfully connected to SQLite database")
+    return engine
 
 # Create engine with fallback logic
 engine = create_database_engine()
