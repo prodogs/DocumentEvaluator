@@ -85,9 +85,10 @@ def create_complete_schema():
         processed_documents INTEGER DEFAULT 0
     );
 
-    -- Docs table for encoded document storage
+    -- Docs table for encoded document storage (completely independent)
     CREATE TABLE docs (
         id SERIAL PRIMARY KEY,
+        file_path TEXT UNIQUE NOT NULL,
         content BYTEA NOT NULL,
         content_type TEXT,
         doc_type TEXT,
@@ -103,8 +104,8 @@ def create_complete_schema():
         filename TEXT NOT NULL,
         folder_id INTEGER REFERENCES folders(id),
         batch_id INTEGER REFERENCES batches(id),
-        doc_id INTEGER REFERENCES docs(id),
         meta_data JSONB DEFAULT '{}',
+        valid TEXT NOT NULL DEFAULT 'Y',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         task_id TEXT
     );
@@ -260,13 +261,13 @@ def create_complete_schema():
     CREATE INDEX idx_batches_batch_number ON batches(batch_number);
     CREATE INDEX idx_batches_created_at ON batches(created_at);
 
+    CREATE INDEX idx_docs_file_path ON docs(file_path);
     CREATE INDEX idx_docs_content_type ON docs(content_type);
     CREATE INDEX idx_docs_doc_type ON docs(doc_type);
 
     CREATE INDEX idx_documents_filepath ON documents(filepath);
     CREATE INDEX idx_documents_folder_id ON documents(folder_id);
     CREATE INDEX idx_documents_batch_id ON documents(batch_id);
-    CREATE INDEX idx_documents_doc_id ON documents(doc_id);
     CREATE INDEX idx_documents_task_id ON documents(task_id);
 
     CREATE INDEX idx_llm_configurations_active ON llm_configurations(active);

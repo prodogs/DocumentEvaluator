@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 import logging
 
-from services.config import service_config
+from services.config import service_config, config_manager
 from services.health_monitor import health_monitor
 from services.client import service_client
 from models import LlmResponse, Prompt, Folder, Connection
@@ -1069,7 +1069,6 @@ def test_connection_configuration(connection_id):
 
         # Import the RAG service client
         from services.client import RAGServiceClient, RequestMethod
-        import json
 
         # Create RAG service client instance
         rag_client = RAGServiceClient()
@@ -1079,7 +1078,6 @@ def test_connection_configuration(connection_id):
 
         # Create a simple test document content
         test_content = "This is a test document for validating LLM configuration."
-        test_filename = "test_config.txt"
 
         # Prepare data for RAG service
         prompts_data = [{'prompt': test_prompt}]
@@ -1091,6 +1089,33 @@ def test_connection_configuration(connection_id):
             'port_no': config_dict['port_no']
         }
 
+        # Create a temporary doc record for testing
+        from models import Doc
+        import base64
+
+        test_session = Session()
+        try:
+            # Create temporary doc record
+            encoded_content = base64.b64encode(test_content.encode('utf-8'))
+            test_doc = Doc(
+                content=encoded_content,
+                content_type='text/plain',
+                doc_type='txt',
+                file_size=len(test_content.encode('utf-8')),
+                encoding='base64'
+            )
+            test_session.add(test_doc)
+            test_session.commit()
+            test_doc_id = test_doc.id
+        except Exception as e:
+            test_session.rollback()
+            test_session.close()
+            return jsonify({
+                'success': False,
+                'message': 'Failed to create test document',
+                'error': str(e)
+            }), 500
+
         # Make test call
         start_time = time.time()
         try:
@@ -1099,12 +1124,9 @@ def test_connection_configuration(connection_id):
                 endpoint="/analyze_document_with_llm",
                 method=RequestMethod.POST,
                 data={
-                    'filename': test_filename,
-                    'prompts': json.dumps(prompts_data),
-                    'llm_provider': json.dumps(llm_provider_data)
-                },
-                files={
-                    'file': (test_filename, test_content.encode('utf-8'), 'text/plain')
+                    'doc_id': test_doc_id,
+                    'prompts': prompts_data,  # Send as object, not JSON string
+                    'llm_provider': llm_provider_data  # Send as object, not JSON string
                 },
                 timeout=30
             )
@@ -1113,7 +1135,7 @@ def test_connection_configuration(connection_id):
             response_time = round((end_time - start_time) * 1000, 2)
 
             if response.success:
-                return jsonify({
+                result = jsonify({
                     'success': True,
                     'message': 'Connection test successful',
                     'response': response.data,
@@ -1123,7 +1145,7 @@ def test_connection_configuration(connection_id):
                     'provider_type': config_dict['provider_type']
                 })
             else:
-                return jsonify({
+                result = jsonify({
                     'success': False,
                     'message': 'Connection test failed',
                     'error': response.error_message,
@@ -1137,7 +1159,7 @@ def test_connection_configuration(connection_id):
             end_time = time.time()
             response_time = round((end_time - start_time) * 1000, 2)
 
-            return jsonify({
+            result = jsonify({
                 'success': False,
                 'message': 'Connection test failed',
                 'error': str(llm_error),
@@ -1146,6 +1168,18 @@ def test_connection_configuration(connection_id):
                 'model_name': config_dict['model_name'],
                 'provider_type': config_dict['provider_type']
             }), 400
+
+        finally:
+            # Clean up test doc
+            try:
+                test_session.delete(test_doc)
+                test_session.commit()
+            except Exception:
+                test_session.rollback()
+            finally:
+                test_session.close()
+
+        return result
 
     except Exception as e:
         logger.error(f"Error testing connection {connection_id}: {str(e)}")
@@ -1460,6 +1494,29 @@ def deactivate_folder(folder_id):
             session.close()
         logger.error(f"Error deactivating folder {folder_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+@service_routes.route('/api/config/document-processing', methods=['GET'])
+def get_document_processing_config():
+    """Get current document processing configuration"""
+    try:
+        doc_config = config_manager.get_document_config()
+
+        return jsonify({
+            'success': True,
+            'config': {
+                'max_file_size_mb': doc_config.max_file_size_mb,
+                'max_file_size_bytes': doc_config.max_file_size_bytes,
+                'max_file_size_display': doc_config.max_file_size_display,
+                'min_file_size_bytes': doc_config.min_file_size_bytes
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting document processing config: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 def register_service_routes(app):
     """Register service management routes with the Flask app"""

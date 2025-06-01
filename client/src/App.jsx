@@ -7,6 +7,7 @@ import './styles/models-providers.css';
 import './styles/staging.css';
 import './styles/configuration.css';
 import './styles/folders.css';
+import './styles/maintenance.css';
 
 import ModelsAndProvidersManager from './components/ModelsAndProvidersManager';
 import StagingManager from './components/StagingManager';
@@ -16,6 +17,7 @@ import PromptManager from './components/PromptManager';
 import FolderManager from './components/FolderManager';
 import BatchDashboard from './components/BatchDashboard';
 import BatchManagement from './components/BatchManagement';
+import MaintenanceManager from './components/MaintenanceManager';
 
 // Use environment variable for API URL, fallback to localhost:5001
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
@@ -49,7 +51,7 @@ function App() {
   const [batchMetaData, setBatchMetaData] = useState('');
 
   // UI state
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'process', 'config', 'providers', 'folders', 'batches'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'process', 'config', 'providers', 'folders', 'batches', 'maintenance'
   const [showConfigModal, setShowConfigModal] = useState(false);
 
   // Accordion state for Analyze Documents page
@@ -699,8 +701,8 @@ function App() {
   };
 
   return (
-    <div className={`App ${activeTab === 'batches' ? 'full-width' : ''}`}>
-      {activeTab !== 'batches' && (
+    <div className={`App ${(activeTab === 'batches' || activeTab === 'maintenance') ? 'full-width' : ''}`}>
+      {activeTab !== 'batches' && activeTab !== 'maintenance' && (
         <>
           <div className="banner-container">
             <img src="/banner2.png" alt="Document Batch Processor" className="banner-image" />
@@ -747,6 +749,12 @@ function App() {
               onClick={() => handleTabChange('batches')}
             >
               📦 Batches
+            </button>
+            <button
+              className={activeTab === 'maintenance' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('maintenance')}
+            >
+              🔧 Maintenance
             </button>
           </div>
 
@@ -795,6 +803,8 @@ function App() {
             <FoldersManager onFoldersChange={() => loadFolders()} />
           )}
 
+
+
           {activeTab === 'process' && (
             <div className="status">
               <p>Status: {message}</p>
@@ -832,6 +842,11 @@ function App() {
       {/* Batch Management - Full Screen */}
       {activeTab === 'batches' && (
         <BatchManagement onNavigateBack={() => setActiveTab('dashboard')} />
+      )}
+
+      {/* Maintenance Manager - Full Screen */}
+      {activeTab === 'maintenance' && (
+        <MaintenanceManager onNavigateBack={() => setActiveTab('dashboard')} />
       )}
     </div>
   );

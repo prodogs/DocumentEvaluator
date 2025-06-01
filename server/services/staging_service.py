@@ -15,6 +15,7 @@ from sqlalchemy import text
 from models import Batch, Document, LlmResponse, Folder, Prompt, Doc, Connection
 from database import Session
 from services.document_encoding_service import DocumentEncodingService
+from services.config import config_manager
 import os
 
 logger = logging.getLogger(__name__)
@@ -373,12 +374,56 @@ class StagingService:
                     for file in files:
                         if file.lower().endswith(('.txt', '.pdf', '.docx', '.doc')):
                             file_path = os.path.join(root, file)
-                            
+
+                            # Check file size before processing
+                            try:
+                                file_size = os.path.getsize(file_path)
+                                doc_config = config_manager.get_document_config()
+
+                                if file_size > doc_config.max_file_size_bytes:
+                                    logger.warning(f"⚠️ Skipping file (too large): {file} ({file_size} bytes > {doc_config.max_file_size_display})")
+                                    continue
+
+                                if file_size < doc_config.min_file_size_bytes:
+                                    logger.warning(f"⚠️ Skipping file (too small): {file} ({file_size} bytes)")
+                                    continue
+                            except OSError as e:
+                                logger.warning(f"⚠️ Cannot access file: {file} - {e}")
+                                continue
+
                             try:
                                 # Check if document already exists
                                 existing_document = session.query(Document).filter(Document.filepath == file_path).first()
 
                                 if existing_document:
+                                    # Check if file has changed (compare file modification time or size)
+                                    file_stat = os.stat(file_path)
+                                    current_file_size = file_stat.st_size
+                                    current_mod_time = file_stat.st_mtime
+
+                                    # Check if we need to refresh the document content
+                                    needs_refresh = False
+                                    if existing_document.doc_id:
+                                        existing_doc = session.query(Doc).filter(Doc.id == existing_document.doc_id).first()
+                                        if existing_doc:
+                                            # Compare file size (simple check for changes)
+                                            if existing_doc.file_size != current_file_size:
+                                                needs_refresh = True
+                                                logger.info(f"📄 File size changed for {file}: {existing_doc.file_size} -> {current_file_size}")
+                                        else:
+                                            needs_refresh = True  # Doc record missing
+                                    else:
+                                        needs_refresh = True  # No doc_id linked
+
+                                    if needs_refresh:
+                                        # Re-encode the document
+                                        doc_record = encoding_service.encode_and_store_document(file_path, session)
+                                        if doc_record:
+                                            existing_document.doc_id = doc_record.id
+                                            logger.info(f"📄 Refreshed document content: {file}")
+                                        else:
+                                            logger.warning(f"⚠️ Failed to refresh document content: {file}")
+
                                     # Use existing document
                                     document = existing_document
                                     logger.info(f"📄 Using existing document: {file}")
@@ -414,13 +459,15 @@ class StagingService:
                                 # Update batch_id for the document (whether new or existing)
                                 document.batch_id = batch_id
 
-                                # Check if LLM responses already exist for this document
+                                # Check if LLM responses already exist for this document in this batch
                                 existing_responses_for_doc = session.query(LlmResponse).filter(
                                     LlmResponse.document_id == document.id
+                                ).join(Document).filter(
+                                    Document.batch_id == batch_id
                                 ).all()
 
                                 if not existing_responses_for_doc:
-                                    # Create LLM response records for each combination only if none exist
+                                    # Create LLM response records for each combination only if none exist for this batch
                                     for connection in connections:
                                         for prompt in prompts:
                                             llm_response = LlmResponse(
@@ -433,7 +480,7 @@ class StagingService:
                                             total_responses += 1
                                     logger.info(f"📄 Created {len(connections) * len(prompts)} LLM responses for document: {file}")
                                 else:
-                                    # Responses already exist, just count them
+                                    # Responses already exist for this batch, just count them
                                     total_responses += len(existing_responses_for_doc)
                                     logger.info(f"📄 Using {len(existing_responses_for_doc)} existing LLM responses for document: {file}")
                                     

@@ -9,6 +9,7 @@ import mimetypes
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 from models import Doc, Document
+from services.config import config_manager
 
 class DocumentEncodingService:
     """Service for encoding and storing document content"""
@@ -20,6 +21,7 @@ class DocumentEncodingService:
             '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff',
             '.html', '.htm', '.xml', '.json', '.md'
         }
+        self.doc_config = config_manager.get_document_config()
 
     def encode_and_store_document(self, file_path: str, session: Session) -> Optional[int]:
         """
@@ -48,6 +50,15 @@ class DocumentEncodingService:
             file_size = os.path.getsize(file_path)
             content_type = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
 
+            # Validate file size
+            if file_size > self.doc_config.max_file_size_bytes:
+                print(f"❌ File too large: {file_path} ({file_size} bytes > {self.doc_config.max_file_size_display})")
+                return None
+
+            if file_size < self.doc_config.min_file_size_bytes:
+                print(f"❌ File too small: {file_path} ({file_size} bytes)")
+                return None
+
             # Extract document type from file extension
             _, ext = os.path.splitext(file_path.lower())
             doc_type = ext[1:] if ext.startswith('.') else ext  # Remove the dot from extension
@@ -57,8 +68,9 @@ class DocumentEncodingService:
                 file_content = file.read()
                 encoded_content = base64.b64encode(file_content)
 
-            # Create doc record
+            # Create doc record with file_path as natural key
             doc = Doc(
+                file_path=file_path,
                 content=encoded_content,
                 content_type=content_type,
                 doc_type=doc_type,
@@ -76,24 +88,25 @@ class DocumentEncodingService:
             print(f"❌ Failed to encode document {file_path}: {e}")
             return None
 
-    def get_encoded_document(self, doc_id: int, session: Session) -> Optional[Dict[str, Any]]:
+    def get_encoded_document_by_path(self, file_path: str, session: Session) -> Optional[Dict[str, Any]]:
         """
-        Retrieve encoded document content by doc_id.
+        Retrieve encoded document content by file_path.
 
         Args:
-            doc_id: ID of the document in docs table
+            file_path: Path of the file in docs table
             session: Database session
 
         Returns:
             Dictionary with document data or None if not found
         """
         try:
-            doc = session.query(Doc).filter(Doc.id == doc_id).first()
+            doc = session.query(Doc).filter(Doc.file_path == file_path).first()
             if not doc:
                 return None
 
             return {
                 'id': doc.id,
+                'file_path': doc.file_path,
                 'content': doc.content.decode('utf-8') if doc.encoding == 'base64' else doc.content,
                 'content_type': doc.content_type,
                 'doc_type': doc.doc_type,
@@ -103,7 +116,7 @@ class DocumentEncodingService:
             }
 
         except Exception as e:
-            print(f"❌ Failed to retrieve encoded document {doc_id}: {e}")
+            print(f"❌ Failed to retrieve encoded document for path {file_path}: {e}")
             return None
 
     def prepare_document_for_llm(self, document: Document, session: Session) -> Optional[Dict[str, Any]]:
@@ -118,14 +131,10 @@ class DocumentEncodingService:
             Dictionary ready for LLM service or None if failed
         """
         try:
-            if not document.doc_id:
-                print(f"❌ Document {document.id} has no doc_id")
-                return None
-
-            # Get encoded content
-            doc_data = self.get_encoded_document(document.doc_id, session)
+            # Get encoded content using file path
+            doc_data = self.get_encoded_document_by_path(document.filepath, session)
             if not doc_data:
-                print(f"❌ Could not retrieve encoded content for document {document.id}")
+                print(f"❌ Could not retrieve encoded content for document {document.id} at path {document.filepath}")
                 return None
 
             # Prepare data for LLM service

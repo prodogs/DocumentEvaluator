@@ -250,7 +250,7 @@ def get_folder_documents(folder_id):
         if not folder:
             return jsonify({'error': 'Folder not found'}), 404
 
-        # Get documents with their doc info
+        # Get documents with their doc info using file_path natural key
         documents_query = session.query(
             Document.id,
             Document.filepath,
@@ -258,7 +258,7 @@ def get_folder_documents(folder_id):
             Document.valid,
             Doc.doc_type,
             Doc.file_size
-        ).outerjoin(Doc, Document.id == Doc.document_id)\
+        ).outerjoin(Doc, Document.filepath == Doc.file_path)\
          .filter(Document.folder_id == folder_id)\
          .order_by(Document.filepath)\
          .all()
@@ -312,8 +312,8 @@ def reprocess_folder(folder_id):
         folder_name = folder.folder_name
         folder_path = folder.folder_path
 
-        # Delete existing docs for documents in this folder
-        docs_to_delete = session.query(Doc).join(Document).filter(Document.folder_id == folder_id)
+        # Delete existing docs for documents in this folder using file_path natural key
+        docs_to_delete = session.query(Doc).join(Document, Doc.file_path == Document.filepath).filter(Document.folder_id == folder_id)
         docs_to_delete.delete(synchronize_session=False)
 
         # Delete existing documents for this folder

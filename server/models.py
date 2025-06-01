@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Text, DateTime, ForeignKey, JSON, LargeBinary, Float, Boolean
+from sqlalchemy import Column, Integer, Text, DateTime, ForeignKey, JSON, LargeBinary, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -7,8 +7,8 @@ from database import Base
 # Ensure we're using the correct Base class and avoid naming conflicts
 __all__ = [
     'Batch', 'Folder', 'Doc', 'Document', 'Prompt',
-    'LlmResponse', 'BatchArchive', 'LlmProvider', 'Model', 'ProviderModel',
-    'ModelAlias', 'LlmModel', 'Connection'
+    'BatchArchive', 'LlmProvider', 'Model', 'ProviderModel',
+    'ModelAlias', 'LlmModel', 'Connection', 'Snapshot'
 ]
 
 class Batch(Base):
@@ -44,20 +44,17 @@ class Folder(Base):
     documents = relationship("Document", back_populates="folder")
 
 class Doc(Base):
-    """Table to store encoded document content"""
+    """Table to store encoded document content - completely independent storage layer"""
     __tablename__ = 'docs'
     __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, autoincrement=True)
-    document_id = Column(Integer, ForeignKey('documents.id'), nullable=True)  # Reverse link to document (optional)
+    file_path = Column(Text, unique=True, nullable=False)  # Natural key for linking
     content = Column(LargeBinary, nullable=False)  # Base64 encoded document content
     content_type = Column(Text, nullable=True)  # MIME type of the document
     doc_type = Column(Text, nullable=True)  # Document type/extension (e.g., 'pdf', 'docx', 'txt')
     file_size = Column(Integer, nullable=True)  # Original file size in bytes
     encoding = Column(Text, default='base64', nullable=False)  # Encoding method used
     created_at = Column(DateTime, default=func.now())
-
-    # Relationship to document (reverse relationship)
-    document = relationship("Document", back_populates="doc", foreign_keys="Doc.document_id")
 
 class Document(Base):
     __tablename__ = 'documents'
@@ -67,16 +64,14 @@ class Document(Base):
     filename = Column(Text, nullable=False)
     folder_id = Column(Integer, ForeignKey('folders.id'), nullable=True)
     batch_id = Column(Integer, ForeignKey('batches.id'), nullable=True)  # Link to batch
-    doc_id = Column(Integer, ForeignKey('docs.id'), nullable=True)  # Link to encoded document content
     meta_data = Column(JSONB, default={}, nullable=True)  # Fixed: DB allows null, use JSONB for PostgreSQL
     valid = Column(Text, default='Y', nullable=False)  # Y = valid, N = invalid (for folder preprocessing)
     created_at = Column(DateTime, default=func.now())
     task_id = Column(Text, nullable=True)  # Task ID for LLM processing recovery
 
-    llm_responses = relationship("LlmResponse", back_populates="document")
+
     folder = relationship("Folder", back_populates="documents")
     batch = relationship("Batch", back_populates="documents")
-    doc = relationship("Doc", back_populates="document", foreign_keys="Doc.document_id", uselist=False)
 
 class Prompt(Base):
     __tablename__ = 'prompts'
@@ -87,7 +82,7 @@ class Prompt(Base):
     active = Column(Integer, default=1, nullable=True)  # Fixed: DB allows null
     created_at = Column(DateTime, default=func.now())  # Added: Missing column from DB
 
-    llm_responses = relationship("LlmResponse", back_populates="prompt")
+
 
 class LlmProvider(Base):
     __tablename__ = 'llm_providers'
@@ -170,42 +165,7 @@ class LlmModel(Base):
 
 
 
-class LlmResponse(Base):
-    __tablename__ = 'llm_responses'
-    __table_args__ = {'extend_existing': True}
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    document_id = Column(Integer, ForeignKey('documents.id'), nullable=True)  # Fixed: DB allows null
-    prompt_id = Column(Integer, ForeignKey('prompts.id'), nullable=True)  # Fixed: DB allows null
 
-    # Use connections instead of deprecated llm_configurations
-    connection_id = Column(Integer, ForeignKey('connections.id'), nullable=False)
-
-    # Store connection details snapshot to preserve info if connection is deleted/modified
-    connection_details = Column(JSONB, nullable=True)
-
-    task_id = Column(Text)
-    status = Column(Text, default='N', nullable=True)  # N = Not started, Fixed: DB allows null
-    started_processing_at = Column(DateTime)
-    completed_processing_at = Column(DateTime)
-    response_json = Column(Text)
-    response_text = Column(Text)  # Added column for response text
-    response_time_ms = Column(Integer)
-    error_message = Column(Text)
-    overall_score = Column(Float, nullable=True)  # Suitability score (0-100) for LLM readiness
-
-    # Token metrics (added for analyze_status response compatibility)
-    input_tokens = Column(Integer, nullable=True)  # Number of input tokens sent to the LLM
-    output_tokens = Column(Integer, nullable=True)  # Number of output tokens received from the LLM
-    time_taken_seconds = Column(Float, nullable=True)  # Time taken for the LLM call in seconds
-    tokens_per_second = Column(Float, nullable=True)  # Rate of tokens per second
-
-    timestamp = Column(DateTime, default=func.now())
-    created_at = Column(DateTime, default=func.now())  # Added: Missing column from DB
-
-    # Relationships
-    document = relationship("Document", back_populates="llm_responses")
-    prompt = relationship("Prompt", back_populates="llm_responses")
-    connection = relationship("Connection", back_populates="llm_responses")
 
 class BatchArchive(Base):
     __tablename__ = 'batch_archive'
@@ -252,4 +212,34 @@ class Connection(Base):
     # Relationships
     provider = relationship("LlmProvider", foreign_keys=[provider_id])
     model = relationship("Model", foreign_keys=[model_id])
-    llm_responses = relationship("LlmResponse", back_populates="connection")
+
+
+
+class Snapshot(Base):
+    __tablename__ = 'snapshots'
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text)
+    file_path = Column(Text, unique=True, nullable=False)
+    file_size = Column(Integer)  # Size in bytes
+    database_name = Column(Text, default='doc_eval', nullable=False)
+    snapshot_type = Column(Text, default='full', nullable=False)  # full, partial, schema_only
+    compression = Column(Text, default='gzip', nullable=False)  # gzip, none
+    created_at = Column(DateTime, default=func.now())
+    created_by = Column(Text, default='system')
+
+    # Metadata about what was included in the snapshot
+    tables_included = Column(JSONB)  # List of table names included
+    record_counts = Column(JSONB)  # Count of records per table at time of snapshot
+    database_version = Column(Text)  # PostgreSQL version
+    application_version = Column(Text)  # Application version when snapshot was created
+
+    # Status tracking
+    status = Column(Text, default='creating', nullable=False)  # creating, completed, failed
+    error_message = Column(Text)  # If status is failed
+
+    # Additional metadata
+    notes = Column(Text)
+    tags = Column(JSONB)  # For categorizing snapshots

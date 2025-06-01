@@ -19,6 +19,7 @@ import base64
 from database import Session
 from models import Folder, Document, Doc
 from sqlalchemy import text, case
+from services.config import config_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,11 +35,19 @@ class FolderPreprocessingService:
         '.csv', '.tsv', '.json', '.xml', '.html', '.htm'
     }
 
-    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB limit
-    MIN_FILE_SIZE = 1  # 1 byte minimum
-
     def __init__(self):
         self.session = None
+        self.doc_config = config_manager.get_document_config()
+
+    @property
+    def max_file_size(self) -> int:
+        """Get maximum file size in bytes from configuration"""
+        return self.doc_config.max_file_size_bytes
+
+    @property
+    def min_file_size(self) -> int:
+        """Get minimum file size in bytes from configuration"""
+        return self.doc_config.min_file_size_bytes
 
     def preprocess_folder_async(self, folder_path: str, folder_name: str, task_id: str, app=None) -> Dict:
         """
@@ -276,11 +285,11 @@ class FolderPreprocessingService:
             Tuple of (is_valid, reason)
         """
         # Check file size
-        if file_info['size'] < self.MIN_FILE_SIZE:
+        if file_info['size'] < self.min_file_size:
             return False, "File too small"
 
-        if file_info['size'] > self.MAX_FILE_SIZE:
-            return False, f"File too large (>{self.MAX_FILE_SIZE/1024/1024:.1f}MB)"
+        if file_info['size'] > self.max_file_size:
+            return False, f"File too large (>{self.doc_config.max_file_size_display})"
 
         # Check file extension
         if file_info['extension'] not in self.VALID_EXTENSIONS:

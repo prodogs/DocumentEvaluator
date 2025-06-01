@@ -1,7 +1,4 @@
 import os
-from models import Document, Connection, Prompt, LlmResponse
-from database import Session
-from services.batch_service import batch_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -59,6 +56,16 @@ def traverse_directory(path, supported_extensions=None):
     return files
 
 def process_folder(folder_path, task_id=None, batch_name=None, folder_id=None, batch_id=None):
+    """DEPRECATED: Process folder functionality moved to KnowledgeDocuments database"""
+    logger.warning(f"process_folder called for {folder_path} but service has been moved to KnowledgeDocuments database")
+
+    return {
+        'totalFiles': 0,
+        'processedFiles': 0,
+        'deprecated': True,
+        'message': 'Process folder functionality has been moved to KnowledgeDocuments database',
+        'reason': 'docs and llm_responses tables moved to separate database'
+    }
     """Process all files in a folder
 
     Args:

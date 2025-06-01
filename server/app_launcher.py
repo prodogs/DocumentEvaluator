@@ -139,6 +139,10 @@ def main():
         from server.api.connection_routes import connection_bp
         app.register_blueprint(connection_bp)
 
+        # Register maintenance routes
+        from server.api.maintenance_routes import maintenance_bp
+        app.register_blueprint(maintenance_bp)
+
         # Initialize service integration components
         from server.services.health_monitor import health_monitor
         from server.api.status_polling import polling_service

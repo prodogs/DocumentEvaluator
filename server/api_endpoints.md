@@ -182,27 +182,37 @@ Deactivates a folder to prevent processing.
 
 ### POST /analyze_document_with_llm
 
-Analyze documents with LLM configurations and prompts.
+Analyze documents with LLM configurations and prompts using doc_id.
 
 **Request:**
 
-- Content-Type: `multipart/form-data`
+- Content-Type: `application/json`
 - Body:
-  - `file`: Document file to analyze
-  - `filename`: Name of the file
-  - `prompts`: JSON string with array of prompt objects
-  - `llm_provider`: JSON string with LLM provider configuration
-  - `meta_data`: (Optional) JSON string with metadata
+  - `doc_id`: ID of the document in the docs table (required)
+  - `prompts`: Array of prompt objects (optional, will use all active prompts if not provided)
+  - `llm_provider`: LLM provider configuration object (optional, will use all active connections if not provided)
+  - `meta_data`: (Optional) Metadata object
 
-**Example LLM Provider Data:**
+**Example Request Body:**
 
 ```json
 {
-  "provider_type": "ollama",
-  "url": "http://studio.local",
-  "model_name": "gemma3-latest",
-  "api_key": null,
-  "port_no": 11434
+  "doc_id": 123,
+  "prompts": [
+    {
+      "prompt": "Analyze this document and provide a summary."
+    }
+  ],
+  "llm_provider": {
+    "provider_type": "ollama",
+    "url": "http://studio.local",
+    "model_name": "gemma3-latest",
+    "api_key": null,
+    "port_no": 11434
+  },
+  "meta_data": {
+    "batch_context": "Document evaluation batch"
+  }
 }
 ```
 

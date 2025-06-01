@@ -19,7 +19,7 @@ import uuid
 import pathlib
 
 from database import Session
-from models import Folder, Prompt, LlmResponse, Document
+from models import Folder, Prompt, Document
 from api.document_routes import register_document_routes, background_tasks
 from api.process_folder import process_folder
 from api.status_polling import polling_service
@@ -212,35 +212,22 @@ def get_providers_api():
 
 @app.route('/api/progress', methods=['GET'])
 def get_progress():
-    """Get current processing progress"""
+    """Get current processing progress - LLM responses moved to KnowledgeDocuments database"""
     try:
         session = Session()
 
-        # Count total documents
-        total_documents = session.query(LlmResponse).count()
-
-        # Count processed documents (status S or F)
-        processed_documents = session.query(LlmResponse).filter(
-            LlmResponse.status.in_(['S', 'F'])
-        ).count()
-
-        # Count outstanding documents (status P or R)
-        outstanding_documents = session.query(LlmResponse).filter(
-            LlmResponse.status.in_(['P', 'R'])
-        ).count()
-
-        # Calculate progress percentage
-        progress = 0
-        if total_documents > 0:
-            progress = int((processed_documents / total_documents) * 100)
+        # Count total documents in current database
+        total_documents = session.query(Document).count()
 
         session.close()
 
+        # Since LLM responses are now in KnowledgeDocuments database, return basic info
         return jsonify({
             'totalDocuments': total_documents,
-            'processedDocuments': processed_documents,
-            'outstandingDocuments': outstanding_documents,
-            'progress': progress
+            'processedDocuments': 0,  # Would need to query KnowledgeDocuments database
+            'outstandingDocuments': 0,  # Would need to query KnowledgeDocuments database
+            'progress': 0,
+            'message': 'LLM responses moved to KnowledgeDocuments database'
         })
     except Exception as e:
         print(f"Error getting progress: {e}")
@@ -248,32 +235,12 @@ def get_progress():
 
 @app.route('/api/errors', methods=['GET'])
 def get_errors():
-    """Get a list of processing errors"""
+    """Get a list of processing errors - LLM responses moved to KnowledgeDocuments database"""
     try:
-        session = Session()
-
-        # Get all responses with status F (failed)
-        error_responses = session.query(LlmResponse).filter(LlmResponse.status == 'F').all()
-
-        errors = []
-        for response in error_responses:
-            # Get associated document and prompt
-            document = session.query(Document).filter(Document.id == response.document_id).first()
-            prompt = session.query(Prompt).filter(Prompt.id == response.prompt_id).first()
-
-            if document and prompt:
-                errors.append({
-                    'filename': document.filename,
-                    'llm_name': response.llm_name,
-                    'prompt_text': prompt.prompt_text,
-                    'error_message': response.error_message,
-                    'timestamp': response.timestamp.isoformat() if response.timestamp else None
-                })
-
-        session.close()
-
+        # Since LLM responses are now in KnowledgeDocuments database, return empty list
         return jsonify({
-            'errors': errors
+            'errors': [],
+            'message': 'LLM responses moved to KnowledgeDocuments database'
         })
     except Exception as e:
         print(f"Error getting errors: {e}")

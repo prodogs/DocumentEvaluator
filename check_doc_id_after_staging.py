@@ -55,18 +55,18 @@ def check_doc_id_after_staging():
         # Also check if the docs table has corresponding entries
         print(f"\n🔍 Checking docs table for corresponding entries...")
         cursor.execute("""
-            SELECT docs.id, docs.document_id, d.filename
+            SELECT docs.id, d.id as document_id, d.filename
             FROM docs
-            LEFT JOIN documents d ON docs.document_id = d.id
+            LEFT JOIN documents d ON docs.id = d.doc_id
             WHERE d.batch_id = (SELECT id FROM batches WHERE batch_number = 7)
             ORDER BY docs.id;
         """)
-        
+
         docs_entries = cursor.fetchall()
         print(f"📊 Found {len(docs_entries)} entries in docs table for batch #7:")
         print("docs.id | document_id | filename")
         print("-" * 50)
-        
+
         for entry in docs_entries:
             docs_id, document_id, filename = entry
             print(f"{docs_id:7} | {document_id:11} | {filename[:30]}")

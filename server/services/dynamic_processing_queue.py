@@ -161,7 +161,7 @@ class DynamicProcessingQueue:
             # Pass only IDs to avoid SQLAlchemy session issues across threads
             processing_thread = threading.Thread(
                 target=self._process_document_async,
-                args=(document.filepath, document.filename, connection.id, prompt.id, llm_response.id),
+                args=(document.filename, connection.id, prompt.id, llm_response.id),
                 daemon=True
             )
             processing_thread.start()
@@ -179,21 +179,18 @@ class DynamicProcessingQueue:
                 pass
             return False
 
-    def _process_document_async(self, file_path, filename, connection_id, prompt_id, llm_response_id):
+    def _process_document_async(self, filename, connection_id, prompt_id, llm_response_id):
         """
         Process a single document asynchronously
 
         This method contains the core document processing logic extracted from process_folder.py
 
         Args:
-            file_path (str): Path to the document file
-            filename (str): Name of the document file
+            filename (str): Name of the document file (for logging purposes)
             connection_id (int): ID of the connection
             prompt_id (int): ID of the prompt
             llm_response_id (int): ID of the LLM response record
         """
-        import os
-        import json
         import time
         from services.client import rag_client, RequestMethod
         from api.status_polling import polling_service
@@ -237,50 +234,34 @@ class DynamicProcessingQueue:
 
             # Get the document and batch for meta_data
             document = session.query(Document).filter_by(id=llm_response.document_id).first()
-            batch_meta_data = None
-            if document and document.batch_id:
-                from models import Batch
-                batch = session.query(Batch).filter_by(id=document.batch_id).first()
-                if batch and batch.meta_data:
-                    batch_meta_data = batch.meta_data
-                    logger.info(f"Using batch meta_data: {batch_meta_data}")
-
-            logger.info(f"Processing document: {filename} with Connection: {connection_row.name}, Prompt ID: {prompt.id}")
-
-            # Read the file content
-            try:
-                with open(file_path, 'rb') as f:
-                    file_content_bytes = f.read()
-
-                # Determine MIME type
-                file_extension = os.path.splitext(filename)[1].lower()
-                if file_extension == '.pdf':
-                    mime_type = 'application/pdf'
-                elif file_extension in ['.txt', '.md']:
-                    mime_type = 'text/plain'
-                elif file_extension in ['.doc', '.docx']:
-                    mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-                elif file_extension in ['.xls', '.xlsx']:
-                    mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                else:
-                    mime_type = 'application/octet-stream'
-
-                # Validate file
-                if len(file_content_bytes) == 0:
-                    raise ValueError(f"File {filename} is empty")
-
-                max_file_size = 50 * 1024 * 1024  # 50MB limit
-                if len(file_content_bytes) > max_file_size:
-                    raise ValueError(f"File {filename} is too large: {len(file_content_bytes)} bytes")
-
-            except Exception as e:
-                error_msg = f"Error reading file {file_path}: {str(e)}"
+            if not document:
+                error_msg = f"Document {llm_response.document_id} not found"
                 llm_response.status = 'F'
                 llm_response.completed_processing_at = func.now()
                 llm_response.error_message = error_msg
                 session.commit()
                 logger.error(error_msg)
                 return
+
+            # Check if document has doc_id
+            if not document.doc_id:
+                error_msg = f"Document {document.id} has no doc_id - document content not available"
+                llm_response.status = 'F'
+                llm_response.completed_processing_at = func.now()
+                llm_response.error_message = error_msg
+                session.commit()
+                logger.error(error_msg)
+                return
+
+            batch_meta_data = None
+            if document.batch_id:
+                from models import Batch
+                batch = session.query(Batch).filter_by(id=document.batch_id).first()
+                if batch and batch.meta_data:
+                    batch_meta_data = batch.meta_data
+                    logger.info(f"Using batch meta_data: {batch_meta_data}")
+
+            logger.info(f"Processing document: {filename} (doc_id: {document.doc_id}) with Connection: {connection_row.name}, Prompt ID: {prompt.id}")
 
             # Call RAG service
             try:
@@ -295,25 +276,22 @@ class DynamicProcessingQueue:
 
                 start_time = time.time()
 
-                # Prepare request data
+                # Prepare request data with doc_id instead of file content
                 request_data = {
-                    'filename': filename,
-                    'prompts': json.dumps(prompts_data),
-                    'llm_provider': json.dumps(llm_provider_data)
+                    'doc_id': document.doc_id,
+                    'prompts': prompts_data,  # Send as object, not JSON string
+                    'llm_provider': llm_provider_data  # Send as object, not JSON string
                 }
 
                 # Add meta_data if available
                 if batch_meta_data:
-                    request_data['meta_data'] = json.dumps(batch_meta_data)
+                    request_data['meta_data'] = batch_meta_data  # Send as object, not JSON string
 
                 response = rag_client.client.call_service(
                     service_name="rag_api",
                     endpoint="/analyze_document_with_llm",
                     method=RequestMethod.POST,
                     data=request_data,
-                    files={
-                        'file': (filename, file_content_bytes, mime_type)
-                    },
                     timeout=60
                 )
 

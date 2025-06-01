@@ -350,6 +350,38 @@ const BatchManagement = ({ onNavigateBack }) => {
     }
   };
 
+  const handleRestageAndRerun = async (batchId, batchName) => {
+    if (!window.confirm(`Are you sure you want to restage and rerun analysis for batch "${batchName}"?\n\nThis will:\n• Delete all existing LLM responses\n• Refresh all documents (check for file changes)\n• Recreate LLM responses for all connections and prompts\n• Start analysis from the beginning\n\nThis is useful when files have changed or you want a complete refresh.`)) {
+      return;
+    }
+
+    try {
+      setActionLoading('restage-and-rerun');
+      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/restage-and-rerun`);
+
+      if (response.data.success) {
+        setError(null);
+        setProgressMessage(`🔄 Restaging and rerunning batch "${batchName}"...`);
+
+        // Start progress polling for the restaged batch
+        startProgressPolling(batchId);
+
+        // Refresh batch details
+        if (selectedBatch && selectedBatch.id === batchId) {
+          await loadBatchDetails(batchId);
+        }
+        await loadBatches();
+      } else {
+        setError(response.data.error || 'Failed to restage and rerun analysis');
+      }
+    } catch (error) {
+      console.error('Error restaging and rerunning analysis:', error);
+      setError('Failed to restage and rerun analysis');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return 'N/A';
     return new Date(timestamp).toLocaleString();
@@ -591,6 +623,7 @@ const BatchManagement = ({ onNavigateBack }) => {
               onReprocessStaging={handleReprocessStaging}
               onRunAnalysis={handleRunAnalysis}
               onRerunAnalysis={handleRerunAnalysis}
+              onRestageAndRerun={handleRestageAndRerun}
               onLoadMoreResponses={handleLoadMoreResponses}
               onResponseDoubleClick={handleResponseDoubleClick}
               actionLoading={actionLoading}
@@ -627,6 +660,7 @@ const BatchDetails = ({
   onReprocessStaging,
   onRunAnalysis,
   onRerunAnalysis,
+  onRestageAndRerun,
   onLoadMoreResponses,
   onResponseDoubleClick,
   actionLoading,
@@ -682,13 +716,23 @@ const BatchDetails = ({
             )}
 
             {batch.status === 'COMPLETED' && (
-              <button
-                onClick={() => onRerunAnalysis(batch.id, batch.batch_name)}
-                disabled={actionLoading === 'rerun-analysis'}
-                className="btn btn-secondary btn-sm"
-              >
-                {actionLoading === 'rerun-analysis' ? '⏳' : '🔄'} Rerun Analysis
-              </button>
+              <>
+                <button
+                  onClick={() => onRerunAnalysis(batch.id, batch.batch_name)}
+                  disabled={actionLoading === 'rerun-analysis'}
+                  className="btn btn-secondary btn-sm"
+                >
+                  {actionLoading === 'rerun-analysis' ? '⏳' : '🔄'} Rerun Analysis
+                </button>
+                <button
+                  onClick={() => onRestageAndRerun(batch.id, batch.batch_name)}
+                  disabled={actionLoading === 'restage-and-rerun'}
+                  className="btn btn-warning btn-sm"
+                  title="Refresh documents and recreate all LLM responses"
+                >
+                  {actionLoading === 'restage-and-rerun' ? '⏳' : '🔄📄'} Restage & Rerun
+                </button>
+              </>
             )}
 
             {/* Legacy Actions for backward compatibility */}

@@ -243,6 +243,35 @@ def register_batch_routes(app):
                 'error': str(e)
             }), 500
 
+    @app.route('/api/batches/<int:batch_id>/restage-and-rerun', methods=['POST'])
+    def restage_and_rerun_analysis(batch_id):
+        """Restage and rerun analysis for a completed batch - refreshes documents and recreates LLM responses"""
+        try:
+            result = batch_service.restage_and_rerun_batch(batch_id)
+
+            if result['success']:
+                return jsonify({
+                    'success': True,
+                    'message': f'Batch {batch_id} restage and rerun started successfully',
+                    'batch_id': batch_id,
+                    'batch_number': result.get('batch_number'),
+                    'batch_name': result.get('batch_name'),
+                    'status': result.get('status', 'ANALYZING'),
+                    'restage_results': result.get('restage_results', {})
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': result['error']
+                }), 400
+
+        except Exception as e:
+            logger.error(f"Error restaging and rerunning batch {batch_id}: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
     @app.route('/api/batches', methods=['GET'])
     def list_batches():
         """List all batches with summary information"""

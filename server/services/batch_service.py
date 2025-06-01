@@ -432,6 +432,151 @@ class BatchService:
         finally:
             session.close()
 
+    def restage_and_rerun_batch(self, batch_id: int) -> Dict[str, Any]:
+        """
+        Restage and rerun analysis for a completed batch
+        - Validates batch is in COMPLETED status
+        - Deletes all existing LLM responses
+        - Refreshes documents and docs (checks for file changes)
+        - Recreates LLM responses for all connection/prompt combinations
+        - Updates batch status and timing
+        - Initiates LLM processing for all new responses
+
+        Args:
+            batch_id (int): ID of the batch to restage and rerun
+
+        Returns:
+            Dict[str, Any]: Execution results and status
+        """
+        session = Session()
+
+        try:
+            # Get the batch
+            batch = session.query(Batch).filter(Batch.id == batch_id).first()
+            if not batch:
+                return {'success': False, 'error': f'Batch {batch_id} not found'}
+
+            # Only allow restaging completed batches
+            if batch.status != 'COMPLETED':
+                return {'success': False, 'error': f'Batch {batch_id} is not completed (current: {batch.status}). Only completed batches can be restaged.'}
+
+            logger.info(f"🔄 RESTAGE: Starting restage and rerun of completed batch #{batch.batch_number}")
+
+            # Step 1: Delete all existing LLM responses for this batch
+            responses_to_delete = session.query(LlmResponse).join(Document).filter(
+                Document.batch_id == batch_id
+            ).all()
+
+            deleted_responses_count = len(responses_to_delete)
+            for response in responses_to_delete:
+                session.delete(response)
+
+            logger.info(f"🗑️ RESTAGE: Deleted {deleted_responses_count} existing LLM responses")
+
+            # Step 2: Get batch configuration for restaging
+            config_snapshot = batch.config_snapshot or {}
+            connection_ids = [config['id'] for config in config_snapshot.get('connections', [])]
+            if not connection_ids:
+                # Fallback to old format for backward compatibility
+                connection_ids = [config['id'] for config in config_snapshot.get('llm_configurations', [])]
+            prompt_ids = [prompt['id'] for prompt in config_snapshot.get('prompts', [])]
+            folder_ids = batch.folder_ids or []
+
+            if not connection_ids or not prompt_ids:
+                return {'success': False, 'error': 'Batch configuration is incomplete - missing connections or prompts'}
+
+            # Step 3: Refresh documents and docs (check for file changes)
+            from services.staging_service import StagingService
+            from services.document_encoding_service import DocumentEncodingService
+
+            staging_service = StagingService()
+            encoding_service = DocumentEncodingService()
+
+            # Update batch status to STAGING for restaging
+            batch.status = 'STAGING'
+            batch.started_at = func.now()
+            batch.completed_at = None
+            batch.processed_documents = 0
+
+            session.commit()
+
+            logger.info(f"🔄 RESTAGE: Starting document refresh and restaging for batch #{batch.batch_number}")
+
+            # Step 4: Perform restaging (this will refresh documents and create new LLM responses)
+            staging_results = staging_service._perform_staging(
+                session, batch_id, folder_ids, connection_ids, prompt_ids, encoding_service
+            )
+
+            if not staging_results['success']:
+                batch.status = 'FAILED_STAGING'
+                session.commit()
+                return {
+                    'success': False,
+                    'error': f'Restaging failed: {staging_results.get("error", "Unknown error")}',
+                    'batch_id': batch_id
+                }
+
+            # Step 5: Update batch status to STAGED and then start processing
+            batch.status = 'STAGED'
+            batch.total_documents = staging_results['total_documents']
+            session.commit()
+
+            logger.info(f"✅ RESTAGE: Batch #{batch.batch_number} restaging completed successfully")
+
+            # Step 6: Start LLM processing for all new responses
+            batch.status = 'ANALYZING'
+            session.commit()
+
+            # Get all new LLM responses that need processing
+            responses_to_process = session.query(LlmResponse).join(Document).filter(
+                Document.batch_id == batch_id,
+                LlmResponse.status == 'N'  # Not started
+            ).all()
+
+            processed_count = 0
+            failed_count = 0
+
+            # The responses are already created with status 'N' (Not started)
+            # The dynamic processing queue will automatically pick them up
+            # No need to manually queue them - just count them
+            for response in responses_to_process:
+                if response.status == 'N':
+                    processed_count += 1
+                else:
+                    failed_count += 1
+
+            session.commit()
+
+            logger.info(f"✅ RESTAGE COMPLETE: Batch #{batch.batch_number} restage and rerun started")
+            logger.info(f"   🔄 Documents refreshed: {staging_results['total_documents']}")
+            logger.info(f"   🗑️ Old responses deleted: {deleted_responses_count}")
+            logger.info(f"   ➕ New responses created: {len(responses_to_process)}")
+            logger.info(f"   🔄 Responses queued for processing: {processed_count}")
+            logger.info(f"   ❌ Failed to queue: {failed_count}")
+
+            return {
+                'success': True,
+                'batch_id': batch_id,
+                'batch_number': batch.batch_number,
+                'batch_name': batch.batch_name,
+                'status': batch.status,
+                'restage_results': {
+                    'total_documents': staging_results['total_documents'],
+                    'deleted_responses': deleted_responses_count,
+                    'new_responses_created': len(responses_to_process),
+                    'queued_for_processing': processed_count,
+                    'failed_to_queue': failed_count,
+                    'staging_details': staging_results
+                }
+            }
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"❌ Error in restage and rerun for batch {batch_id}: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+        finally:
+            session.close()
+
     def rerun_batch(self, batch_id: int) -> Dict[str, Any]:
         """
         Rerun analysis for a completed batch

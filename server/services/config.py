@@ -6,6 +6,25 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class DocumentProcessingConfig:
+    """Configuration for document processing limits and settings"""
+    max_file_size_mb: float = 50.0  # Maximum file size in MB
+    min_file_size_bytes: int = 1     # Minimum file size in bytes
+
+    @property
+    def max_file_size_bytes(self) -> int:
+        """Get maximum file size in bytes"""
+        return int(self.max_file_size_mb * 1024 * 1024)
+
+    @property
+    def max_file_size_display(self) -> str:
+        """Get human-readable file size limit"""
+        if self.max_file_size_mb >= 1024:
+            return f"{self.max_file_size_mb / 1024:.1f}GB"
+        else:
+            return f"{self.max_file_size_mb:.1f}MB"
+
 class ServiceType(Enum):
     """Types of external services"""
     RAG_API = "rag_api"
@@ -43,15 +62,17 @@ class ServiceConfig:
 
 class ServiceConfigManager:
     """Manages configuration for all external services"""
-    
+
     def __init__(self):
         self.services: Dict[str, ServiceConfig] = {}
+        self.document_config = DocumentProcessingConfig()
         self._load_default_configs()
         self._load_environment_configs()
+        self._load_document_processing_config()
     
     def _load_default_configs(self):
         """Load default service configurations"""
-        # RAG API Service (port 7001)
+        # RAG API Service (port 7001) - DISABLED until service is available
         self.services["rag_api"] = ServiceConfig(
             name="rag_api",
             service_type=ServiceType.RAG_API,
@@ -61,7 +82,7 @@ class ServiceConfigManager:
             max_retries=3,
             retry_delay=2.0,
             health_check_endpoint="/api/health",
-            enabled=True
+            enabled=False  # Disabled to prevent health check warnings
         )
         
         # Document Processor Service (current service - port 5001)
@@ -98,10 +119,25 @@ class ServiceConfigManager:
             doc_config.timeout = int(os.getenv("DOC_PROCESSOR_TIMEOUT", doc_config.timeout))
         
         logger.info("Environment service configurations loaded")
-    
+
+    def _load_document_processing_config(self):
+        """Load document processing configuration from environment variables"""
+        # Load max file size from environment (in MB)
+        max_file_size_mb = float(os.getenv("MAX_FILE_SIZE_MB", self.document_config.max_file_size_mb))
+        min_file_size_bytes = int(os.getenv("MIN_FILE_SIZE_BYTES", self.document_config.min_file_size_bytes))
+
+        self.document_config.max_file_size_mb = max_file_size_mb
+        self.document_config.min_file_size_bytes = min_file_size_bytes
+
+        logger.info(f"Document processing config loaded: max_file_size={self.document_config.max_file_size_display}, min_file_size={min_file_size_bytes} bytes")
+
     def get_service(self, service_name: str) -> Optional[ServiceConfig]:
         """Get configuration for a specific service"""
         return self.services.get(service_name)
+
+    def get_document_config(self) -> DocumentProcessingConfig:
+        """Get document processing configuration"""
+        return self.document_config
     
     def get_services_by_type(self, service_type: ServiceType) -> Dict[str, ServiceConfig]:
         """Get all services of a specific type"""
@@ -159,5 +195,8 @@ class ServiceConfigManager:
             for name, config in self.services.items()
         }
 
-# Global service configuration manager
-service_config = ServiceConfigManager()
+# Global configuration instance
+config_manager = ServiceConfigManager()
+
+# Backward compatibility alias
+service_config = config_manager
