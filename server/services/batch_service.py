@@ -35,19 +35,27 @@ class BatchService:
         """
         session = Session()
         try:
-            # Get all active LLM configurations
-            llm_configs = session.query(LlmConfiguration).filter_by(active=1).all()
-            llm_configs_data = []
-            for config in llm_configs:
-                llm_configs_data.append({
-                    'id': config.id,
-                    'llm_name': config.llm_name,
-                    'base_url': config.base_url,
-                    'model_name': config.model_name,
-                    'api_key': config.api_key,  # Note: Consider security implications
-                    'provider_type': config.provider_type,
-                    'port_no': config.port_no,
-                    'active': config.active
+            # Get all active connections
+            from sqlalchemy import text
+            result = session.execute(text("""
+                SELECT c.*, p.provider_type, m.display_name as model_name
+                FROM connections c
+                LEFT JOIN llm_providers p ON c.provider_id = p.id
+                LEFT JOIN models m ON c.model_id = m.id
+                WHERE c.is_active = true
+            """))
+
+            connections_data = []
+            for row in result:
+                connections_data.append({
+                    'id': row.id,
+                    'name': row.name,
+                    'base_url': row.base_url,
+                    'model_name': row.model_name or 'default',
+                    'api_key': row.api_key,  # Note: Consider security implications
+                    'provider_type': row.provider_type,
+                    'port_no': row.port_no,
+                    'is_active': row.is_active
                 })
 
             # Get all active prompts
@@ -96,16 +104,16 @@ class BatchService:
             config_snapshot = {
                 'version': '1.0',
                 'created_at': datetime.now().isoformat(),
-                'llm_configurations': llm_configs_data,
+                'connections': connections_data,
                 'prompts': prompts_data,
                 'folders': folders_data,
                 'documents': documents_data,
                 'summary': {
-                    'total_llm_configs': len(llm_configs_data),
+                    'total_connections': len(connections_data),
                     'total_prompts': len(prompts_data),
                     'total_folders': len(folders_data),
                     'total_documents': len(documents_data),
-                    'expected_combinations': len(llm_configs_data) * len(prompts_data) * len(documents_data)
+                    'expected_combinations': len(connections_data) * len(prompts_data) * len(documents_data)
                 }
             }
 
@@ -224,17 +232,16 @@ class BatchService:
                     document.batch_id = batch.id
                     documents_created += 1
 
-                    # Create LLM response records for all prompt/LLM combinations
+                    # Create LLM response records for all prompt/connection combinations
                     prompts = config_snapshot['prompts']
-                    llm_configs = config_snapshot['llm_configurations']
+                    connections = config_snapshot['connections']
 
                     for prompt in prompts:
-                        for llm_config in llm_configs:
+                        for connection in connections:
                             llm_response = LlmResponse(
                                 document_id=document.id,
                                 prompt_id=prompt['id'],
-                                llm_config_id=llm_config['id'],
-                                llm_name=llm_config['llm_name'],
+                                connection_id=connection['id'],
                                 status='N',  # Not started
                                 task_id=None
                             )
@@ -346,14 +353,25 @@ class BatchService:
                         failed_count += 1
                         continue
 
-                    # Get prompt and LLM config
+                    # Get prompt and connection
                     prompt = session.query(Prompt).filter(Prompt.id == response.prompt_id).first()
-                    llm_config = session.query(LlmConfiguration).filter(LlmConfiguration.id == response.llm_config_id).first()
 
-                    if not prompt or not llm_config:
-                        logger.error(f"❌ Missing prompt or LLM config for response {response.id}")
+                    # Get connection with provider info
+                    from sqlalchemy import text
+                    connection_result = session.execute(text("""
+                        SELECT c.*, p.provider_type, m.display_name as model_name
+                        FROM connections c
+                        LEFT JOIN llm_providers p ON c.provider_id = p.id
+                        LEFT JOIN models m ON c.model_id = m.id
+                        WHERE c.id = :connection_id
+                    """), {"connection_id": response.connection_id})
+
+                    connection_row = connection_result.fetchone()
+
+                    if not prompt or not connection_row:
+                        logger.error(f"❌ Missing prompt or connection for response {response.id}")
                         response.status = 'F'
-                        response.error_message = 'Missing prompt or LLM configuration'
+                        response.error_message = 'Missing prompt or connection'
                         failed_count += 1
                         continue
 
@@ -369,7 +387,7 @@ class BatchService:
                     session.commit()
 
                     # Call LLM service (this will be async in real implementation)
-                    logger.info(f"🔄 Processing document {document.filename} with {llm_config.llm_name}")
+                    logger.info(f"🔄 Processing document {document.filename} with {connection_row.name}")
 
                     # For now, just mark as ready for processing
                     # The actual LLM processing will be handled by the existing background service

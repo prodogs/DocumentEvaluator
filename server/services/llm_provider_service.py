@@ -13,10 +13,10 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session as SQLSession
-from sqlalchemy import and_
+from sqlalchemy import and_, text
 
 from database import Session
-from models import LlmProvider, LlmModel, LlmConfiguration, Model, ProviderModel
+from models import LlmProvider, LlmModel
 from services.model_service import model_service
 
 logger = logging.getLogger(__name__)
@@ -215,28 +215,39 @@ class LlmProviderService:
             provider = session.query(LlmProvider).filter(LlmProvider.id == provider_id).first()
             if not provider:
                 return False, "Provider not found"
-            
-            # Get provider configuration from associated LlmConfiguration
-            config = session.query(LlmConfiguration).filter(
-                LlmConfiguration.provider_id == provider_id
-            ).first()
-            
-            if not config:
-                return False, "No configuration found for provider"
-            
+
+            # Get provider configuration from associated Connection
+            from sqlalchemy import text
+            result = session.execute(text("""
+                SELECT c.* FROM connections c
+                WHERE c.provider_id = :provider_id AND c.is_active = true
+                LIMIT 1
+            """), {"provider_id": provider_id})
+
+            connection_row = result.fetchone()
+            if not connection_row:
+                return False, "No active connection found for provider"
+
             provider_config = {
                 'provider_type': provider.provider_type,
-                'base_url': config.base_url,
-                'api_key': config.api_key,
-                'port_no': config.port_no
+                'base_url': connection_row.base_url,
+                'api_key': connection_row.api_key,
+                'port_no': connection_row.port_no
             }
             
             success, models, error = self.discover_models(provider_id, provider_config)
-            
+
             if success:
-                # Update last sync time
-                config.last_model_sync = datetime.utcnow()
-                config.available_models = json.dumps([model['model_name'] for model in models])
+                # Update last sync time on the connection
+                session.execute(text("""
+                    UPDATE connections
+                    SET last_model_sync = NOW(),
+                        available_models = :available_models
+                    WHERE id = :connection_id
+                """), {
+                    "connection_id": connection_row.id,
+                    "available_models": json.dumps([model['model_name'] for model in models])
+                })
                 session.commit()
                 return True, f"Synced {len(models)} models"
             else:

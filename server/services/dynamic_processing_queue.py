@@ -11,7 +11,7 @@ import threading
 import logging
 from typing import List, Dict, Any
 from sqlalchemy.sql import func
-from models import LlmResponse, Document, LlmConfiguration, Prompt, Batch
+from models import LlmResponse, Document, Connection, Prompt, Batch
 from database import Session
 
 logger = logging.getLogger(__name__)
@@ -137,10 +137,10 @@ class DynamicProcessingQueue:
                 logger.error(f"Document {llm_response.document_id} not found for LLM response {llm_response.id}")
                 return False
 
-            # Get the LLM configuration
-            llm_config = session.query(LlmConfiguration).filter_by(id=llm_response.llm_config_id).first()
-            if not llm_config:
-                logger.error(f"LLM configuration {llm_response.llm_config_id} not found for LLM response {llm_response.id}")
+            # Get the connection
+            connection = session.query(Connection).filter_by(id=llm_response.connection_id).first()
+            if not connection:
+                logger.error(f"Connection {llm_response.connection_id} not found for LLM response {llm_response.id}")
                 return False
 
             # Get the prompt
@@ -161,7 +161,7 @@ class DynamicProcessingQueue:
             # Pass only IDs to avoid SQLAlchemy session issues across threads
             processing_thread = threading.Thread(
                 target=self._process_document_async,
-                args=(document.filepath, document.filename, llm_config.id, prompt.id, llm_response.id),
+                args=(document.filepath, document.filename, connection.id, prompt.id, llm_response.id),
                 daemon=True
             )
             processing_thread.start()
@@ -179,7 +179,7 @@ class DynamicProcessingQueue:
                 pass
             return False
 
-    def _process_document_async(self, file_path, filename, llm_config_id, prompt_id, llm_response_id):
+    def _process_document_async(self, file_path, filename, connection_id, prompt_id, llm_response_id):
         """
         Process a single document asynchronously
 
@@ -188,7 +188,7 @@ class DynamicProcessingQueue:
         Args:
             file_path (str): Path to the document file
             filename (str): Name of the document file
-            llm_config_id (int): ID of the LLM configuration
+            connection_id (int): ID of the connection
             prompt_id (int): ID of the prompt
             llm_response_id (int): ID of the LLM response record
         """
@@ -206,13 +206,22 @@ class DynamicProcessingQueue:
                 logger.error(f"LLM response {llm_response_id} not found")
                 return
 
-            # Get the LLM configuration
-            llm_config = session.query(LlmConfiguration).filter_by(id=llm_config_id).first()
-            if not llm_config:
-                logger.error(f"LLM configuration {llm_config_id} not found")
+            # Get the connection with provider and model info
+            from sqlalchemy import text
+            result = session.execute(text("""
+                SELECT c.*, p.provider_type, m.display_name as model_name
+                FROM connections c
+                LEFT JOIN llm_providers p ON c.provider_id = p.id
+                LEFT JOIN models m ON c.model_id = m.id
+                WHERE c.id = :connection_id
+            """), {"connection_id": connection_id})
+
+            connection_row = result.fetchone()
+            if not connection_row:
+                logger.error(f"Connection {connection_id} not found")
                 llm_response.status = 'F'
                 llm_response.completed_processing_at = func.now()
-                llm_response.error_message = f"LLM configuration {llm_config_id} not found"
+                llm_response.error_message = f"Connection {connection_id} not found"
                 session.commit()
                 return
 
@@ -236,7 +245,7 @@ class DynamicProcessingQueue:
                     batch_meta_data = batch.meta_data
                     logger.info(f"Using batch meta_data: {batch_meta_data}")
 
-            logger.info(f"Processing document: {filename} with LLM: {llm_config.llm_name}, Prompt ID: {prompt.id}")
+            logger.info(f"Processing document: {filename} with Connection: {connection_row.name}, Prompt ID: {prompt.id}")
 
             # Read the file content
             try:
@@ -277,11 +286,11 @@ class DynamicProcessingQueue:
             try:
                 prompts_data = [{'prompt': prompt.prompt_text}]
                 llm_provider_data = {
-                    'provider_type': llm_config.provider_type,
-                    'url': llm_config.base_url,
-                    'model_name': llm_config.model_name,
-                    'api_key': llm_config.api_key,
-                    'port_no': llm_config.port_no
+                    'provider_type': connection_row.provider_type,
+                    'url': connection_row.base_url,  # RAG API expects 'url' field instead of 'base_url'
+                    'model_name': connection_row.model_name or 'default',
+                    'api_key': connection_row.api_key,
+                    'port_no': connection_row.port_no
                 }
 
                 start_time = time.time()

@@ -178,42 +178,45 @@ class BatchArchiveService:
 
     def _serialize_llm_response(self, response: LlmResponse) -> Dict[str, Any]:
         """Serialize LLM response object to dictionary"""
-        # Get LLM config data safely without triggering schema mismatch
-        llm_config_data = None
-        if response.llm_config_id:
+        # Get connection data instead of deprecated llm_config
+        connection_data = None
+        if response.connection_id:
             try:
-                # Query only the existing columns to avoid schema mismatch
+                # Query connection data with provider and model info
                 from database import Session
                 from sqlalchemy import text
                 session = Session()
-                llm_config = session.execute(text("""
-                    SELECT id, llm_name, provider_type, base_url, model_name, api_key, port_no, active, created_at
-                    FROM llm_configurations
-                    WHERE id = :config_id
-                """), {'config_id': response.llm_config_id}).fetchone()
+                connection = session.execute(text("""
+                    SELECT c.id, c.name, c.description, c.base_url, c.api_key, c.port_no,
+                           c.is_active, c.created_at, p.provider_type, m.display_name as model_name
+                    FROM connections c
+                    LEFT JOIN llm_providers p ON c.provider_id = p.id
+                    LEFT JOIN models m ON c.model_id = m.id
+                    WHERE c.id = :connection_id
+                """), {'connection_id': response.connection_id}).fetchone()
 
-                if llm_config:
-                    llm_config_data = {
-                        'id': llm_config[0],
-                        'llm_name': llm_config[1],
-                        'provider_type': llm_config[2],
-                        'base_url': llm_config[3],
-                        'model_name': llm_config[4],
-                        'api_key': llm_config[5],
-                        'port_no': llm_config[6],
-                        'active': llm_config[7],
-                        'created_at': llm_config[8].isoformat() if llm_config[8] else None
+                if connection:
+                    connection_data = {
+                        'id': connection[0],
+                        'name': connection[1],
+                        'description': connection[2],
+                        'base_url': connection[3],
+                        'api_key': connection[4],
+                        'port_no': connection[5],
+                        'is_active': connection[6],
+                        'created_at': connection[7].isoformat() if connection[7] else None,
+                        'provider_type': connection[8],
+                        'model_name': connection[9]
                     }
                 session.close()
             except Exception as e:
-                logger.warning(f"Could not load LLM config {response.llm_config_id}: {e}")
+                logger.warning(f"Could not load connection {response.connection_id}: {e}")
 
         return {
             'id': response.id,
             'document_id': response.document_id,
             'prompt_id': response.prompt_id,
-            'llm_config_id': response.llm_config_id,
-            'llm_name': response.llm_name,
+            'connection_id': response.connection_id,
             'task_id': response.task_id,
             'status': response.status,
             'response_json': response.response_json,
@@ -229,7 +232,7 @@ class BatchArchiveService:
                 'description': response.prompt.description,
                 'active': response.prompt.active
             } if response.prompt else None,
-            'llm_config': llm_config_data
+            'connection': connection_data
         }
 
     def _count_response_statuses(self, responses: List[LlmResponse]) -> Dict[str, int]:

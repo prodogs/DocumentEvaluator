@@ -182,8 +182,7 @@ class LlmConfiguration(Base):
     active = Column(Integer, default=1, nullable=True)  # Fixed: DB allows null
     created_at = Column(DateTime, nullable=True)
 
-    # Relationships (simplified to avoid missing column errors)
-    llm_responses = relationship("LlmResponse", foreign_keys="LlmResponse.llm_config_id", back_populates="llm_config")
+    # Note: LlmConfiguration is deprecated - use Connection model instead
 
 class LlmResponse(Base):
     __tablename__ = 'llm_responses'
@@ -192,12 +191,8 @@ class LlmResponse(Base):
     document_id = Column(Integer, ForeignKey('documents.id'), nullable=True)  # Fixed: DB allows null
     prompt_id = Column(Integer, ForeignKey('prompts.id'), nullable=True)  # Fixed: DB allows null
 
-    # NEW: Use connections instead of deprecated llm_configurations
+    # Use connections instead of deprecated llm_configurations
     connection_id = Column(Integer, ForeignKey('connections.id'), nullable=False)
-
-    # DEPRECATED: Keep for backward compatibility during migration
-    llm_config_id = Column(Integer, ForeignKey('llm_configurations.id'), nullable=True)  # DEPRECATED
-    llm_name = Column(Text, ForeignKey('llm_configurations.llm_name'), nullable=True)  # DEPRECATED - made nullable
 
     task_id = Column(Text)
     status = Column(Text, default='R', nullable=True)  # Fixed: DB allows null
@@ -221,8 +216,7 @@ class LlmResponse(Base):
     # Relationships
     document = relationship("Document", back_populates="llm_responses")
     prompt = relationship("Prompt", back_populates="llm_responses")
-    connection = relationship("Connection", back_populates="llm_responses")  # NEW: Connection relationship
-    llm_config = relationship("LlmConfiguration", foreign_keys=[llm_config_id], back_populates="llm_responses")  # DEPRECATED
+    connection = relationship("Connection", back_populates="llm_responses")
 
 class BatchArchive(Base):
     __tablename__ = 'batch_archive'

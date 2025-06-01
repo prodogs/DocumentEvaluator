@@ -1022,26 +1022,35 @@ def delete_llm_configuration(config_id):
         logger.error(f"Error deleting LLM configuration {config_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
-@service_routes.route('/api/llm-configurations/<int:config_id>/test', methods=['POST'])
-def test_llm_configuration(config_id):
-    """Test an LLM configuration by making a test call"""
+@service_routes.route('/api/connections/<int:connection_id>/test', methods=['POST'])
+def test_connection_configuration(connection_id):
+    """Test a connection by making a test call to the RAG API"""
     import time
     try:
         session = Session()
-        config = session.query(LlmConfiguration).filter(LlmConfiguration.id == config_id).first()
+        # Get connection with provider information
+        from sqlalchemy import text
+        result = session.execute(text("""
+            SELECT c.*, p.provider_type, m.common_name as model_name
+            FROM connections c
+            LEFT JOIN llm_providers p ON c.provider_id = p.id
+            LEFT JOIN models m ON c.model_id = m.id
+            WHERE c.id = :connection_id
+        """), {"connection_id": connection_id})
 
-        if not config:
+        connection_row = result.fetchone()
+        if not connection_row:
             session.close()
-            return jsonify({'error': f'LLM configuration not found: {config_id}'}), 404
+            return jsonify({'error': f'Connection not found: {connection_id}'}), 404
 
         config_dict = {
-            'id': config.id,
-            'llm_name': config.llm_name,
-            'base_url': config.base_url,
-            'model_name': config.model_name,
-            'provider_type': config.provider_type,
-            'api_key': config.api_key,
-            'port_no': config.port_no
+            'id': connection_row.id,
+            'name': connection_row.name,
+            'base_url': connection_row.base_url,
+            'model_name': connection_row.model_name or 'default',
+            'provider_type': connection_row.provider_type,
+            'api_key': connection_row.api_key,
+            'port_no': connection_row.port_no
         }
 
         session.close()
@@ -1064,7 +1073,7 @@ def test_llm_configuration(config_id):
         prompts_data = [{'prompt': test_prompt}]
         llm_provider_data = {
             'provider_type': config_dict['provider_type'],
-            'url': config_dict['base_url'],
+            'url': config_dict['base_url'],  # RAG API expects 'url' field instead of 'base_url'
             'model_name': config_dict['model_name'],
             'api_key': config_dict['api_key'],
             'port_no': config_dict['port_no']
@@ -1094,20 +1103,20 @@ def test_llm_configuration(config_id):
             if response.success:
                 return jsonify({
                     'success': True,
-                    'message': 'LLM configuration test successful',
+                    'message': 'Connection test successful',
                     'response': response.data,
                     'response_time_ms': response_time,
-                    'config_name': config_dict['llm_name'],
+                    'connection_name': config_dict['name'],
                     'model_name': config_dict['model_name'],
                     'provider_type': config_dict['provider_type']
                 })
             else:
                 return jsonify({
                     'success': False,
-                    'message': 'LLM configuration test failed',
+                    'message': 'Connection test failed',
                     'error': response.error_message,
                     'response_time_ms': response_time,
-                    'config_name': config_dict['llm_name'],
+                    'connection_name': config_dict['name'],
                     'model_name': config_dict['model_name'],
                     'provider_type': config_dict['provider_type']
                 }), 400
@@ -1118,16 +1127,16 @@ def test_llm_configuration(config_id):
 
             return jsonify({
                 'success': False,
-                'message': 'LLM configuration test failed',
+                'message': 'Connection test failed',
                 'error': str(llm_error),
                 'response_time_ms': response_time,
-                'config_name': config_dict['llm_name'],
+                'connection_name': config_dict['name'],
                 'model_name': config_dict['model_name'],
                 'provider_type': config_dict['provider_type']
             }), 400
 
     except Exception as e:
-        logger.error(f"Error testing LLM configuration {config_id}: {str(e)}")
+        logger.error(f"Error testing connection {connection_id}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @service_routes.route('/api/llm-configurations/models', methods=['POST'])
