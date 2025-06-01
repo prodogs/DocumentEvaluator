@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from server.app import Folder
 import server.app as main_app
-from server.models import LlmConfiguration, Prompt
+from server.models import Connection, Prompt
 
 
 def register_db_folders_endpoints(app):
@@ -91,7 +91,7 @@ def register_db_folders_endpoints(app):
 
             # Count total files to be processed
             session = Session()
-            llm_configs_count = session.query(LlmConfiguration).count()
+            llm_configs_count = session.query(Connection).filter(Connection.is_active == True).count()
             prompts_count = session.query(Prompt).count()
             docs_count = session.query(main_app.Document).count()
             session.close()

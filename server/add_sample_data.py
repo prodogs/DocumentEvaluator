@@ -4,7 +4,7 @@ Script to add sample data to the Document Batch Processor database
 """
 
 from database import SessionLocal
-from models import LlmConfiguration, Prompt, Folder
+from models import Prompt, Folder, Connection, LlmProvider
 
 def add_sample_data():
     """Add sample LLM configurations, prompts, and folders"""
@@ -13,37 +13,38 @@ def add_sample_data():
     
     try:
         # Check if data already exists
-        existing_configs = session.query(LlmConfiguration).count()
+        existing_configs = session.query(Connection).count()
         existing_prompts = session.query(Prompt).count()
         existing_folders = session.query(Folder).count()
-        
-        print(f"Current data: {existing_configs} configs, {existing_prompts} prompts, {existing_folders} folders")
-        
-        # Add sample LLM Configuration if none exist
+
+        print(f"Current data: {existing_configs} connections, {existing_prompts} prompts, {existing_folders} folders")
+
+        # Add sample Connection if none exist (replaces deprecated LlmConfiguration)
         if existing_configs == 0:
-            print("Adding sample LLM Configuration...")
-            llm_config = LlmConfiguration(
-                llm_name='OpenAI GPT-4',
+            print("Adding sample Connection...")
+            # First ensure we have a provider
+            provider = session.query(LlmProvider).filter_by(name='OpenAI').first()
+            if not provider:
+                provider = LlmProvider(
+                    name='OpenAI',
+                    provider_type='openai',
+                    default_base_url='https://api.openai.com/v1',
+                    supports_model_discovery=True,
+                    auth_type='api_key'
+                )
+                session.add(provider)
+                session.flush()  # Get the ID
+
+            connection = Connection(
+                name='OpenAI GPT-4',
+                description='OpenAI GPT-4 connection',
+                provider_id=provider.id,
                 base_url='https://api.openai.com/v1',
-                model_name='gpt-4',
                 api_key='your-api-key-here',
-                provider_type='openai',
                 port_no=443,
-                active=1
+                is_active=True
             )
-            session.add(llm_config)
-            
-            # Add another LLM config for variety
-            llm_config2 = LlmConfiguration(
-                llm_name='Local LLM Service',
-                base_url='http://localhost:7001',
-                model_name='local-model',
-                api_key='',
-                provider_type='local',
-                port_no=7001,
-                active=1
-            )
-            session.add(llm_config2)
+            session.add(connection)
         
         # Add sample Prompts if none exist
         if existing_prompts == 0:
@@ -86,17 +87,17 @@ def add_sample_data():
         session.commit()
         
         # Verify the data was added
-        final_configs = session.query(LlmConfiguration).count()
+        final_configs = session.query(Connection).count()
         final_prompts = session.query(Prompt).count()
         final_folders = session.query(Folder).count()
-        
+
         print("✅ Sample data added successfully!")
-        print(f"Final counts: {final_configs} configs, {final_prompts} prompts, {final_folders} folders")
-        
+        print(f"Final counts: {final_configs} connections, {final_prompts} prompts, {final_folders} folders")
+
         # List the added items
-        print("\nAdded LLM Configurations:")
-        for config in session.query(LlmConfiguration).all():
-            print(f"  - {config.llm_name} ({config.provider_type})")
+        print("\nAdded Connections:")
+        for config in session.query(Connection).all():
+            print(f"  - {config.name} ({config.base_url})")
             
         print("\nAdded Prompts:")
         for prompt in session.query(Prompt).all():

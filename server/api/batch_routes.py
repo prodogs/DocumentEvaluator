@@ -18,6 +18,26 @@ from services.staging_service import staging_service
 
 logger = logging.getLogger(__name__)
 
+
+def _format_connection_for_response(response):
+    """
+    Format connection information for API response using stored connection_details or fallback to current connection.
+
+    Args:
+        response: LlmResponse object
+
+    Returns:
+        Dictionary with connection information or None
+    """
+    from utils.connection_utils import format_connection_for_api_response
+
+    # Use stored connection details if available, with fallback to current connection
+    return format_connection_for_api_response(
+        connection_details=response.connection_details,
+        fallback_connection=response.connection if hasattr(response, 'connection') else None
+    )
+
+
 def register_batch_routes(app):
     """Register batch management routes with the Flask app"""
 
@@ -208,9 +228,8 @@ def register_batch_routes(app):
     def rerun_analysis(batch_id):
         """Rerun analysis for a completed batch"""
         try:
-            # This would reset all LLM responses and restart analysis
-            # For now, we'll use the existing run_batch functionality
-            result = batch_service.run_batch(batch_id)
+            # Use the new rerun_batch method that properly resets LLM responses
+            result = batch_service.rerun_batch(batch_id)
 
             if result['success']:
                 return jsonify(result), 200
@@ -556,12 +575,7 @@ def register_batch_routes(app):
                             'description': response.prompt.description,
                             'prompt_text': response.prompt.prompt_text[:100] + '...' if response.prompt and len(response.prompt.prompt_text) > 100 else response.prompt.prompt_text if response.prompt else None
                         } if response.prompt else None,
-                        'connection': {
-                            'id': response.connection_id,
-                            'name': response.connection.name if response.connection else None,
-                            'model_name': None,  # Will be populated when schema is fixed
-                            'provider_type': None  # Will be populated when schema is fixed
-                        } if response.connection_id else None
+                        'connection': _format_connection_for_response(response)
                     }
                     response_list.append(response_data)
 

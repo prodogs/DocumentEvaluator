@@ -10,7 +10,7 @@ from typing import Dict, Any
 
 from services.llm_provider_service import llm_provider_service
 from database import Session
-from models import LlmProvider, LlmModel, LlmConfiguration
+from models import LlmProvider, LlmModel, Connection
 
 logger = logging.getLogger(__name__)
 

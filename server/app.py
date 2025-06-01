@@ -19,7 +19,7 @@ import uuid
 import pathlib
 
 from database import Session
-from models import Folder, LlmConfiguration, Prompt, LlmResponse, Document
+from models import Folder, Prompt, LlmResponse, Document
 from api.document_routes import register_document_routes, background_tasks
 from api.process_folder import process_folder
 from api.status_polling import polling_service
@@ -37,7 +37,7 @@ register_document_routes(app)
 app.register_blueprint(run_batch_bp)
 
 # Register service routes - this will be done in app_launcher.py to avoid duplicate registration
-# from server.api.service_routes import service_routes
+# from api.service_routes import service_routes
 # app.register_blueprint(service_routes)
 
 # Register folder routes - this will be done in app_launcher.py to avoid duplicate registration
@@ -51,6 +51,14 @@ app.register_blueprint(run_batch_bp)
 # Register batch routes - this will be done in app_launcher.py to avoid duplicate registration
 # from api.batch_routes import register_batch_routes
 # register_batch_routes(app)
+
+# Register LLM provider routes - this will be done in app_launcher.py to avoid duplicate registration
+# from api.llm_provider_routes import llm_provider_bp
+# app.register_blueprint(llm_provider_bp)
+
+# Register model routes - this will be done in app_launcher.py to avoid duplicate registration
+# from api.model_routes import model_bp
+# app.register_blueprint(model_bp)
 
 # Register main routes - this will be done in app_launcher.py to avoid duplicate registration
 # from server.routes import register_routes
@@ -104,30 +112,39 @@ cleanup_thread.start()
 
 @app.route('/llm-configs', methods=['GET'])
 def get_llm_configs():
-    """Get all LLM configurations from the database"""
+    """Get all connections (replaces deprecated LLM configurations)"""
     try:
         session = Session()
-        llm_configs = session.query(LlmConfiguration).all()
+        from sqlalchemy import text
+        # Use raw SQL to get connections with provider information
+        configs_result = session.execute(text("""
+            SELECT c.id, c.name, c.base_url, m.common_name as model_name,
+                   p.provider_type, c.port_no, c.api_key
+            FROM connections c
+            LEFT JOIN llm_providers p ON c.provider_id = p.id
+            LEFT JOIN models m ON c.model_id = m.id
+        """))
+        configs = configs_result.fetchall()
 
         result = {
             'llmConfigs': []
         }
 
-        for config in llm_configs:
+        for config in configs:
             result['llmConfigs'].append({
-                'id': config.id,
-                'llm_name': config.llm_name,
-                'base_url': config.base_url,
-                'model_name': config.model_name,
-                'api_key': config.api_key,
-                'provider_type': config.provider_type,
-                'port_no': config.port_no
+                'id': config[0],
+                'llm_name': config[1],  # Use connection name for backward compatibility
+                'base_url': config[2],
+                'model_name': config[3] or 'default',
+                'provider_type': config[4],
+                'port_no': config[5],
+                'api_key': config[6]
             })
 
         session.close()
         return jsonify(result)
     except Exception as e:
-        print(f"Error getting LLM configurations: {e}")
+        print(f"Error getting connections (LLM configurations): {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/prompts', methods=['GET'])
@@ -155,35 +172,42 @@ def get_prompts():
         print(f"Error getting prompts: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/llm-configurations', methods=['GET'])
-def get_llm_configurations():
-    """Get all LLM configurations from the database"""
+# Add legacy provider endpoints for frontend compatibility
+@app.route('/providers', methods=['GET'])
+def get_providers_legacy():
+    """Legacy endpoint - returns provider data directly"""
     try:
-        session = Session()
-        llm_configs = session.query(LlmConfiguration).all()
-
-        result = {
-            'llm_configurations': []
-        }
-
-        for config in llm_configs:
-            result['llm_configurations'].append({
-                'id': config.id,
-                'llm_name': config.llm_name,
-                'base_url': config.base_url,
-                'model_name': config.model_name,
-                'api_key': config.api_key,
-                'provider_type': config.provider_type,
-                'port_no': config.port_no,
-                'active': bool(config.active)  # Include active field as boolean
-            })
-
-        session.close()
-        return jsonify(result)
+        from services.llm_provider_service import llm_provider_service
+        providers = llm_provider_service.get_all_providers()
+        return jsonify({
+            'success': True,
+            'providers': providers
+        }), 200
     except Exception as e:
-        print(f"Error getting LLM configurations: {e}")
-        return jsonify({'error': str(e)}), 500
+        print(f"Error getting providers: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
+@app.route('/api/providers', methods=['GET'])
+def get_providers_api():
+    """Alternative API endpoint for providers"""
+    try:
+        from services.llm_provider_service import llm_provider_service
+        providers = llm_provider_service.get_all_providers()
+        return jsonify({
+            'success': True,
+            'providers': providers
+        }), 200
+    except Exception as e:
+        print(f"Error getting providers: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# Removed duplicate /api/llm-configurations endpoint - now handled by service_routes.py
 # Removed duplicate /api/folders endpoint - now handled by service_routes.py
 
 @app.route('/api/progress', methods=['GET'])

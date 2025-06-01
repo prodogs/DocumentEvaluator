@@ -1,5 +1,5 @@
 import os
-from models import Document, LlmConfiguration, Prompt, LlmResponse
+from models import Document, Connection, Prompt, LlmResponse
 from database import Session
 from services.batch_service import batch_service
 import logging
@@ -107,18 +107,18 @@ def process_folder(folder_path, task_id=None, batch_name=None, folder_id=None, b
                 'message': f'No supported files found in folder: {folder_path}'
             }
 
-        # Get only active LLM configurations and prompts
+        # Get only active connections and prompts
         session = Session()
-        llm_configs = session.query(LlmConfiguration).filter(LlmConfiguration.active == 1).all()
+        llm_configs = session.query(Connection).filter(Connection.is_active == True).all()
         prompts = session.query(Prompt).filter(Prompt.active == 1).all()
 
         if not llm_configs:
             session.close()
-            logger.warning("No active LLM configurations found.")
+            logger.warning("No active connections found.")
             return {
                 'totalFiles': len(files),
                 'processedFiles': 0,
-                'message': 'No active LLM configurations found'
+                'message': 'No active connections found'
             }
 
         if not prompts:

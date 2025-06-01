@@ -8,8 +8,8 @@ relationships with Service Providers.
 import logging
 from flask import Blueprint, request, jsonify
 
-from server.services.model_service import model_service
-from server.services.model_normalization_service import model_normalization_service
+from services.model_service import model_service
+from services.model_normalization_service import model_normalization_service
 
 logger = logging.getLogger(__name__)
 

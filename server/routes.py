@@ -4,7 +4,7 @@ import uuid
 import threading
 
 # Import from models and database
-from models import Folder, Document, LlmConfiguration, Prompt, LlmResponse
+from models import Folder, Document, Connection, Prompt, LlmResponse
 from database import Session
 from api.process_folder import process_folder
 from services.batch_service import batch_service
@@ -90,7 +90,7 @@ def register_routes(app, background_tasks, process_folder_func=None):
 
             # Count total files to be processed
             session = Session()
-            llm_configs_count = session.query(LlmConfiguration).count()
+            llm_configs_count = session.query(Connection).filter(Connection.is_active == True).count()
             prompts_count = session.query(Prompt).count()
             docs_count = session.query(Document).count()
             session.close()

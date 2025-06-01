@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.sql import func
 from sqlalchemy import and_, or_
-from models import Batch, Document, LlmResponse, Folder, LlmConfiguration, Prompt, Doc
+from models import Batch, Document, LlmResponse, Folder, Connection, Prompt, Doc
 from database import Session
 from services.document_encoding_service import DocumentEncodingService
 import os
@@ -238,10 +238,15 @@ class BatchService:
 
                     for prompt in prompts:
                         for connection in connections:
+                            # Capture connection details for preservation
+                            from utils.connection_utils import capture_connection_details
+                            connection_details = capture_connection_details(session, connection['id'])
+
                             llm_response = LlmResponse(
                                 document_id=document.id,
                                 prompt_id=prompt['id'],
                                 connection_id=connection['id'],
+                                connection_details=connection_details,
                                 status='N',  # Not started
                                 task_id=None
                             )
@@ -423,6 +428,167 @@ class BatchService:
         except Exception as e:
             session.rollback()
             logger.error(f"❌ Error in STAGE 2 batch execution: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+        finally:
+            session.close()
+
+    def rerun_batch(self, batch_id: int) -> Dict[str, Any]:
+        """
+        Rerun analysis for a completed batch
+        - Validates batch is in COMPLETED status
+        - Resets all LLM responses to 'N' (Not started)
+        - Clears response data and timing fields
+        - Updates batch status and timing
+        - Initiates LLM processing for all reset responses
+
+        Args:
+            batch_id (int): ID of the batch to rerun
+
+        Returns:
+            Dict[str, Any]: Execution results and status
+        """
+        session = Session()
+
+        try:
+            # Get the batch
+            batch = session.query(Batch).filter(Batch.id == batch_id).first()
+            if not batch:
+                return {'success': False, 'error': f'Batch {batch_id} not found'}
+
+            # Only allow rerunning completed batches
+            if batch.status != 'COMPLETED':
+                return {'success': False, 'error': f'Batch {batch_id} is not completed (current: {batch.status}). Only completed batches can be rerun.'}
+
+            logger.info(f"🔄 RERUN: Starting rerun of completed batch #{batch.batch_number}")
+
+            # Reset all LLM responses for this batch
+            responses_to_reset = session.query(LlmResponse).join(Document).filter(
+                Document.batch_id == batch_id
+            ).all()
+
+            reset_count = 0
+            for response in responses_to_reset:
+                # Reset response to initial state
+                response.status = 'N'  # Not started
+                response.started_processing_at = None
+                response.completed_processing_at = None
+                response.response_json = None
+                response.response_text = None
+                response.response_time_ms = None
+                response.error_message = None
+                response.overall_score = None
+                response.input_tokens = None
+                response.output_tokens = None
+                response.task_id = None
+                reset_count += 1
+
+            # Reset batch status and timing
+            batch.status = 'ANALYZING'
+            batch.started_at = func.now()
+            batch.completed_at = None
+            batch.processed_documents = 0
+
+            session.commit()
+
+            logger.info(f"✅ RERUN RESET: Reset {reset_count} LLM responses for batch #{batch.batch_number}")
+
+            # Now run the batch using existing logic
+            # Get all documents in this batch
+            documents = session.query(Document).filter(Document.batch_id == batch_id).all()
+
+            # Get all LLM responses that need processing (should be all of them now)
+            responses_to_process = session.query(LlmResponse).join(Document).filter(
+                Document.batch_id == batch_id,
+                LlmResponse.status == 'N'  # Not started
+            ).all()
+
+            logger.info(f"🚀 RERUN PROCESSING: Starting processing of {len(responses_to_process)} responses")
+
+            processed_count = 0
+            failed_count = 0
+
+            for response in responses_to_process:
+                try:
+                    # Get document
+                    document = session.query(Document).filter(Document.id == response.document_id).first()
+                    if not document:
+                        logger.error(f"❌ Document not found for response {response.id}")
+                        response.status = 'F'
+                        response.error_message = 'Document not found'
+                        failed_count += 1
+                        continue
+
+                    # Get prompt and connection
+                    prompt = session.query(Prompt).filter(Prompt.id == response.prompt_id).first()
+
+                    # Get connection with provider info
+                    from sqlalchemy import text
+                    connection_result = session.execute(text("""
+                        SELECT c.*, p.provider_type, m.display_name as model_name
+                        FROM connections c
+                        LEFT JOIN llm_providers p ON c.provider_id = p.id
+                        LEFT JOIN models m ON c.model_id = m.id
+                        WHERE c.id = :connection_id
+                    """), {"connection_id": response.connection_id})
+
+                    connection_row = connection_result.fetchone()
+
+                    if not prompt or not connection_row:
+                        logger.error(f"❌ Missing prompt or connection for response {response.id}")
+                        response.status = 'F'
+                        response.error_message = 'Missing prompt or connection'
+                        failed_count += 1
+                        continue
+
+                    # Prepare metadata for LLM (merge batch and document metadata)
+                    combined_meta_data = batch.meta_data.copy() if batch.meta_data else {}
+                    if 'document_meta' not in combined_meta_data:
+                        combined_meta_data['document_meta'] = {}
+                    combined_meta_data['document_meta'].update(document.meta_data)
+
+                    # Update response status to processing
+                    response.status = 'P'
+                    response.started_processing_at = func.now()
+                    session.commit()
+
+                    # Call LLM service (this will be async in real implementation)
+                    logger.info(f"🔄 Reprocessing document {document.filename} with {connection_row.name}")
+
+                    # For now, just mark as ready for processing
+                    # The actual LLM processing will be handled by the existing background service
+                    response.status = 'R'  # Ready for processing
+                    processed_count += 1
+
+                except Exception as e:
+                    logger.error(f"❌ Error processing response {response.id}: {e}")
+                    response.status = 'F'
+                    response.error_message = str(e)
+                    failed_count += 1
+
+            session.commit()
+
+            logger.info(f"✅ RERUN COMPLETE: Batch #{batch.batch_number} rerun started")
+            logger.info(f"   🔄 Responses queued for processing: {processed_count}")
+            logger.info(f"   ❌ Failed responses: {failed_count}")
+
+            return {
+                'success': True,
+                'batch_id': batch_id,
+                'batch_number': batch.batch_number,
+                'batch_name': batch.batch_name,
+                'status': batch.status,
+                'rerun_results': {
+                    'total_documents': len(documents),
+                    'total_responses_reset': reset_count,
+                    'total_responses': len(responses_to_process),
+                    'queued_for_processing': processed_count,
+                    'failed_to_queue': failed_count
+                }
+            }
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"❌ Error in batch rerun: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
         finally:
             session.close()
@@ -991,9 +1157,18 @@ class BatchService:
                         if batch.status not in ['ANALYZING']:
                             batch.status = 'P'  # Processing (just started, legacy)
                 else:
-                    # No responses means no documents to process - mark as completed
-                    batch.status = 'COMPLETED'  # Use new COMPLETED status
-                    batch.completed_at = func.now()
+                    # No responses - this indicates a problem with batch setup
+                    # Don't automatically mark as completed, keep current status
+                    # This prevents batches from showing as completed when they have no LLM responses
+                    logger.warning(f"Batch {batch_id} has no LLM responses - keeping current status: {batch.status}")
+                    # Only mark as completed if batch was explicitly set to a final status
+                    if batch.status in ['FAILED_STAGING', 'STAGED']:
+                        # These are valid final states that might have no responses
+                        pass
+                    else:
+                        # For other statuses, this indicates an issue
+                        logger.error(f"Batch {batch_id} has no LLM responses but status is {batch.status}")
+                        # Consider setting to an error state or keeping current status
 
             session.commit()
 

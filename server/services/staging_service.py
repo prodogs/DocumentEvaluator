@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.sql import func
 from sqlalchemy import text
-from models import Batch, Document, LlmResponse, Folder, LlmConfiguration, Prompt, Doc, Connection
+from models import Batch, Document, LlmResponse, Folder, Prompt, Doc, Connection
 from database import Session
 from services.document_encoding_service import DocumentEncodingService
 import os

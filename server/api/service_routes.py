@@ -4,7 +4,7 @@ import logging
 from services.config import service_config
 from services.health_monitor import health_monitor
 from services.client import service_client
-from models import LlmResponse, Prompt, LlmConfiguration, Folder
+from models import LlmResponse, Prompt, Folder, Connection
 from database import Session
 
 logger = logging.getLogger(__name__)
@@ -461,19 +461,18 @@ def get_response_time_analytics():
         else:
             median_response_time = sorted_times[n//2]
 
-        # Format recent requests with LLM configuration and prompt details
+        # Format recent requests with connection and prompt details
         recent_requests = []
         for response in recent_responses:
-            # Get LLM configuration details if available
-            llm_config_details = None
-            if response.llm_config_id and response.llm_config:
-                llm_config_details = {
-                    'id': response.llm_config.id,
-                    'llm_name': response.llm_config.llm_name,
-                    'model_name': response.llm_config.model_name,
-                    'provider_type': response.llm_config.provider_type,
-                    'base_url': response.llm_config.base_url,
-                    'active': bool(response.llm_config.active)
+            # Get connection details if available
+            connection_details = None
+            if response.connection_id and response.connection:
+                connection_details = {
+                    'id': response.connection.id,
+                    'name': response.connection.name,
+                    'base_url': response.connection.base_url,
+                    'provider_type': response.connection.provider.provider_type if response.connection.provider else None,
+                    'is_active': response.connection.is_active
                 }
 
             # Get prompt details if available
@@ -490,8 +489,7 @@ def get_response_time_analytics():
                 'id': response.id,
                 'task_id': response.task_id,
                 'document_id': response.document_id,
-                'llm_name': response.llm_name,  # Keep for backward compatibility
-                'llm_config': llm_config_details,
+                'connection': connection_details,
                 'prompt': prompt_details,
                 'status': response.status,
                 'response_time_ms': response.response_time_ms,
@@ -760,21 +758,27 @@ def delete_prompt(prompt_id):
 
 @service_routes.route('/api/llm-configurations', methods=['GET'])
 def list_llm_configurations():
-    """List all LLM configurations with their active status"""
+    """List all connections (replaces deprecated LLM configurations)"""
     try:
         session = Session()
-        # Use raw SQL to avoid schema mismatch issues
+        # Use raw SQL to get connections with provider information
         from sqlalchemy import text
-        configs_result = session.execute(text("SELECT id, llm_name, base_url, model_name, provider_type, port_no, active FROM llm_configurations"))
+        configs_result = session.execute(text("""
+            SELECT c.id, c.name, c.base_url, m.common_name as model_name,
+                   p.provider_type, c.port_no, c.is_active
+            FROM connections c
+            LEFT JOIN llm_providers p ON c.provider_id = p.id
+            LEFT JOIN models m ON c.model_id = m.id
+        """))
         configs = configs_result.fetchall()
 
         config_list = []
         for config in configs:
             config_list.append({
                 'id': config[0],
-                'llm_name': config[1],
+                'llm_name': config[1],  # Use connection name for backward compatibility
                 'base_url': config[2],
-                'model_name': config[3],
+                'model_name': config[3] or 'default',
                 'provider_type': config[4],
                 'port_no': config[5],
                 'active': bool(config[6])
@@ -791,123 +795,135 @@ def list_llm_configurations():
     except Exception as e:
         if 'session' in locals():
             session.close()
-        logger.error(f"Error listing LLM configurations: {e}", exc_info=True)
+        logger.error(f"Error listing connections (LLM configurations): {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @service_routes.route('/api/llm-configurations/<int:config_id>/activate', methods=['POST'])
 def activate_llm_configuration(config_id):
-    """Activate an LLM configuration"""
+    """Activate a connection (replaces deprecated LLM configuration)"""
     try:
         session = Session()
-        config = session.query(LlmConfiguration).filter(LlmConfiguration.id == config_id).first()
+        from models import Connection
+        connection = session.query(Connection).filter(Connection.id == config_id).first()
 
-        if not config:
+        if not connection:
             session.close()
-            return jsonify({'error': f'LLM configuration not found: {config_id}'}), 404
+            return jsonify({'error': f'Connection not found: {config_id}'}), 404
 
-        config.active = 1
+        connection.is_active = True
         session.commit()
 
         # Extract values before closing session
-        llm_name = config.llm_name
+        connection_name = connection.name
         session.close()
 
-        logger.info(f"Activated LLM configuration ID {config_id}: {llm_name}")
+        logger.info(f"Activated connection ID {config_id}: {connection_name}")
 
         return jsonify({
-            'message': f'LLM configuration {config_id} activated successfully',
+            'message': f'Connection {config_id} activated successfully',
             'config_id': config_id,
-            'llm_name': llm_name,
+            'llm_name': connection_name,  # For backward compatibility
             'active': True
         }), 200
 
     except Exception as e:
         if 'session' in locals():
             session.close()
-        logger.error(f"Error activating LLM configuration {config_id}: {e}", exc_info=True)
+        logger.error(f"Error activating connection {config_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @service_routes.route('/api/llm-configurations/<int:config_id>/deactivate', methods=['POST'])
 def deactivate_llm_configuration(config_id):
-    """Deactivate an LLM configuration"""
+    """Deactivate a connection (replaces deprecated LLM configuration)"""
     try:
         session = Session()
-        config = session.query(LlmConfiguration).filter(LlmConfiguration.id == config_id).first()
+        from models import Connection
+        connection = session.query(Connection).filter(Connection.id == config_id).first()
 
-        if not config:
+        if not connection:
             session.close()
-            return jsonify({'error': f'LLM configuration not found: {config_id}'}), 404
+            return jsonify({'error': f'Connection not found: {config_id}'}), 404
 
-        config.active = 0
+        connection.is_active = False
         session.commit()
 
         # Extract values before closing session
-        llm_name = config.llm_name
+        connection_name = connection.name
         session.close()
 
-        logger.info(f"Deactivated LLM configuration ID {config_id}: {llm_name}")
+        logger.info(f"Deactivated connection ID {config_id}: {connection_name}")
 
         return jsonify({
-            'message': f'LLM configuration {config_id} deactivated successfully',
+            'message': f'Connection {config_id} deactivated successfully',
             'config_id': config_id,
-            'llm_name': llm_name,
+            'llm_name': connection_name,  # For backward compatibility
             'active': False
         }), 200
 
     except Exception as e:
         if 'session' in locals():
             session.close()
-        logger.error(f"Error deactivating LLM configuration {config_id}: {e}", exc_info=True)
+        logger.error(f"Error deactivating connection {config_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @service_routes.route('/api/llm-configurations', methods=['POST'])
 def create_llm_configuration():
-    """Create a new LLM configuration"""
+    """Create a new connection (replaces deprecated LLM configuration)"""
     try:
         data = request.get_json()
 
         # Validate required fields
-        required_fields = ['llm_name', 'base_url', 'model_name', 'provider_type']
+        required_fields = ['llm_name', 'base_url', 'provider_type']
         for field in required_fields:
             if not data.get(field):
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
         session = Session()
 
-        # Check if llm_name already exists
-        existing = session.query(LlmConfiguration).filter(LlmConfiguration.llm_name == data['llm_name']).first()
+        # Check if connection name already exists
+        existing = session.query(Connection).filter(Connection.name == data['llm_name']).first()
         if existing:
             session.close()
-            return jsonify({'error': f'LLM configuration with name "{data["llm_name"]}" already exists'}), 400
+            return jsonify({'error': f'Connection with name "{data["llm_name"]}" already exists'}), 400
 
-        config = LlmConfiguration(
-            llm_name=data['llm_name'],
+        # Find provider by type (assuming provider_type maps to provider name)
+        from sqlalchemy import text
+        provider_result = session.execute(text("""
+            SELECT id FROM llm_providers WHERE provider_type = :provider_type LIMIT 1
+        """), {'provider_type': data['provider_type']})
+        provider_row = provider_result.fetchone()
+
+        if not provider_row:
+            session.close()
+            return jsonify({'error': f'Provider type "{data["provider_type"]}" not found'}), 400
+
+        connection = Connection(
+            name=data['llm_name'],
             base_url=data['base_url'],
-            model_name=data['model_name'],
-            provider_type=data['provider_type'],
+            provider_id=provider_row[0],
             api_key=data.get('api_key', ''),
-            port_no=data.get('port_no', 0),
-            active=1 if data.get('active', True) else 0
+            port_no=data.get('port_no', None),
+            is_active=data.get('active', True)
         )
 
-        session.add(config)
+        session.add(connection)
         session.commit()
 
         result = {
-            'id': config.id,
-            'llm_name': config.llm_name,
-            'base_url': config.base_url,
-            'model_name': config.model_name,
-            'provider_type': config.provider_type,
-            'port_no': config.port_no,
-            'active': bool(config.active)
+            'id': connection.id,
+            'llm_name': connection.name,  # Use connection name for backward compatibility
+            'base_url': connection.base_url,
+            'model_name': 'default',  # Connections don't store model_name directly
+            'provider_type': data['provider_type'],  # Use the original provider_type
+            'port_no': connection.port_no,
+            'active': bool(connection.is_active)
         }
 
         session.close()
-        logger.info(f"Created LLM configuration: {config.llm_name}")
+        logger.info(f"Created connection: {connection.name}")
 
         return jsonify({
-            'message': 'LLM configuration created successfully',
+            'message': 'Connection created successfully',
             'config': result
         }), 201
 
@@ -920,59 +936,55 @@ def create_llm_configuration():
 
 @service_routes.route('/api/llm-configurations/<int:config_id>', methods=['PUT'])
 def update_llm_configuration(config_id):
-    """Update an existing LLM configuration"""
+    """Update an existing connection (replaces deprecated LLM configuration)"""
     try:
         data = request.get_json()
         session = Session()
 
-        config = session.query(LlmConfiguration).filter(LlmConfiguration.id == config_id).first()
-        if not config:
+        connection = session.query(Connection).filter(Connection.id == config_id).first()
+        if not connection:
             session.close()
-            return jsonify({'error': f'LLM configuration not found: {config_id}'}), 404
+            return jsonify({'error': f'Connection not found: {config_id}'}), 404
 
-        # Check if new llm_name conflicts with existing (excluding current record)
-        if 'llm_name' in data and data['llm_name'] != config.llm_name:
-            existing = session.query(LlmConfiguration).filter(
-                LlmConfiguration.llm_name == data['llm_name'],
-                LlmConfiguration.id != config_id
+        # Check if new name conflicts with existing (excluding current record)
+        if 'llm_name' in data and data['llm_name'] != connection.name:
+            existing = session.query(Connection).filter(
+                Connection.name == data['llm_name'],
+                Connection.id != config_id
             ).first()
             if existing:
                 session.close()
-                return jsonify({'error': f'LLM configuration with name "{data["llm_name"]}" already exists'}), 400
+                return jsonify({'error': f'Connection with name "{data["llm_name"]}" already exists'}), 400
 
         # Update fields
         if 'llm_name' in data:
-            config.llm_name = data['llm_name']
+            connection.name = data['llm_name']
         if 'base_url' in data:
-            config.base_url = data['base_url']
-        if 'model_name' in data:
-            config.model_name = data['model_name']
-        if 'provider_type' in data:
-            config.provider_type = data['provider_type']
+            connection.base_url = data['base_url']
         if 'api_key' in data:
-            config.api_key = data['api_key']
+            connection.api_key = data['api_key']
         if 'port_no' in data:
-            config.port_no = data['port_no']
+            connection.port_no = data['port_no']
         if 'active' in data:
-            config.active = 1 if data['active'] else 0
+            connection.is_active = data['active']
 
         session.commit()
 
         result = {
-            'id': config.id,
-            'llm_name': config.llm_name,
-            'base_url': config.base_url,
-            'model_name': config.model_name,
-            'provider_type': config.provider_type,
-            'port_no': config.port_no,
-            'active': bool(config.active)
+            'id': connection.id,
+            'llm_name': connection.name,
+            'base_url': connection.base_url,
+            'model_name': 'default',  # Connections don't store model_name directly
+            'provider_type': 'unknown',  # Would need to join with provider to get this
+            'port_no': connection.port_no,
+            'active': bool(connection.is_active)
         }
 
         session.close()
-        logger.info(f"Updated LLM configuration ID {config_id}: {config.llm_name}")
+        logger.info(f"Updated connection ID {config_id}: {connection.name}")
 
         return jsonify({
-            'message': 'LLM configuration updated successfully',
+            'message': 'Connection updated successfully',
             'config': result
         }), 200
 
@@ -985,34 +997,34 @@ def update_llm_configuration(config_id):
 
 @service_routes.route('/api/llm-configurations/<int:config_id>', methods=['DELETE'])
 def delete_llm_configuration(config_id):
-    """Delete an LLM configuration"""
+    """Delete a connection (replaces deprecated LLM configuration)"""
     try:
         session = Session()
-        config = session.query(LlmConfiguration).filter(LlmConfiguration.id == config_id).first()
+        connection = session.query(Connection).filter(Connection.id == config_id).first()
 
-        if not config:
+        if not connection:
             session.close()
-            return jsonify({'error': f'LLM configuration not found: {config_id}'}), 404
+            return jsonify({'error': f'Connection not found: {config_id}'}), 404
 
-        # Check if configuration is being used in any LLM responses
+        # Check if connection is being used in any LLM responses
         from models import LlmResponse
-        responses_count = session.query(LlmResponse).filter(LlmResponse.llm_config_id == config_id).count()
+        responses_count = session.query(LlmResponse).filter(LlmResponse.connection_id == config_id).count()
 
         if responses_count > 0:
             session.close()
             return jsonify({
-                'error': f'Cannot delete LLM configuration: it is referenced by {responses_count} LLM responses'
+                'error': f'Cannot delete connection: it is referenced by {responses_count} LLM responses'
             }), 400
 
-        llm_name = config.llm_name
-        session.delete(config)
+        connection_name = connection.name
+        session.delete(connection)
         session.commit()
         session.close()
 
-        logger.info(f"Deleted LLM configuration ID {config_id}: {llm_name}")
+        logger.info(f"Deleted connection ID {config_id}: {connection_name}")
 
         return jsonify({
-            'message': f'LLM configuration "{llm_name}" deleted successfully'
+            'message': f'Connection "{connection_name}" deleted successfully'
         }), 200
 
     except Exception as e:
@@ -1273,7 +1285,7 @@ def list_llm_responses():
         from sqlalchemy.orm import joinedload
         query = session.query(LlmResponse).options(
             joinedload(LlmResponse.prompt),
-            joinedload(LlmResponse.llm_config)
+            joinedload(LlmResponse.connection)
         )
 
         if status_filter:
@@ -1294,17 +1306,16 @@ def list_llm_responses():
                     'active': bool(response.prompt.active)
                 }
 
-            # Get LLM configuration details
-            llm_config_info = None
-            if response.llm_config_id and response.llm_config:
-                llm_config_info = {
-                    'id': response.llm_config.id,
-                    'llm_name': response.llm_config.llm_name,
-                    'model_name': response.llm_config.model_name,
-                    'provider_type': response.llm_config.provider_type,
-                    'base_url': response.llm_config.base_url,
-                    'port_no': response.llm_config.port_no,
-                    'active': bool(response.llm_config.active)
+            # Get connection details
+            connection_info = None
+            if response.connection_id and response.connection:
+                connection_info = {
+                    'id': response.connection.id,
+                    'name': response.connection.name,
+                    'base_url': response.connection.base_url,
+                    'provider_type': response.connection.provider.provider_type if response.connection.provider else None,
+                    'port_no': response.connection.port_no,
+                    'is_active': response.connection.is_active
                 }
 
             response_list.append({
@@ -1313,7 +1324,7 @@ def list_llm_responses():
                 'task_id': response.task_id,
                 'status': response.status,
                 'prompt': prompt_info,
-                'llm_config': llm_config_info,
+                'connection': connection_info,
                 'llm_name': response.llm_name,  # Keep for backward compatibility
                 'response_time_ms': response.response_time_ms,
                 'overall_score': response.overall_score,  # Include suitability score (0-100)

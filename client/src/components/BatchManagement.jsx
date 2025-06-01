@@ -914,9 +914,9 @@ const LlmResponseItem = ({ response, formatTimestamp, onDoubleClick }) => {
       <div className="response-details">
         <div className="response-config">
           <span className="config-icon">🤖</span>
-          <span className="config-name">{response.llm_config?.llm_name || 'Unknown LLM'}</span>
-          {response.llm_config?.model_name && (
-            <span className="model-name">({response.llm_config.model_name})</span>
+          <span className="config-name">{response.connection?.name || 'Unknown LLM'}</span>
+          {response.connection?.model_name && (
+            <span className="model-name">({response.connection.model_name})</span>
           )}
         </div>
 
@@ -951,11 +951,93 @@ const LlmResponseItem = ({ response, formatTimestamp, onDoubleClick }) => {
 
 // Response Detail Modal component
 const ResponseDetailModal = ({ response, onClose, formatTimestamp }) => {
+  const [modalSize, setModalSize] = React.useState({ width: 800, height: 600 });
+  const [isResizing, setIsResizing] = React.useState(false);
+  const [resizeStart, setResizeStart] = React.useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [isMaximized, setIsMaximized] = React.useState(false);
+  const [previousSize, setPreviousSize] = React.useState({ width: 800, height: 600 });
+  const modalRef = React.useRef(null);
+
   const handleBackdropClick = (e) => {
     if (e.target === e.currentTarget) {
       onClose();
     }
   };
+
+  const handleResizeStart = (e) => {
+    e.preventDefault();
+    setIsResizing(true);
+    setResizeStart({
+      x: e.clientX,
+      y: e.clientY,
+      width: modalSize.width,
+      height: modalSize.height
+    });
+  };
+
+  const handleMaximizeToggle = () => {
+    if (isMaximized) {
+      // Restore to previous size
+      setModalSize(previousSize);
+      setIsMaximized(false);
+    } else {
+      // Maximize
+      setPreviousSize(modalSize);
+      setModalSize({
+        width: window.innerWidth - 40,
+        height: window.innerHeight - 40
+      });
+      setIsMaximized(true);
+    }
+  };
+
+  React.useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isResizing) return;
+
+      const deltaX = e.clientX - resizeStart.x;
+      const deltaY = e.clientY - resizeStart.y;
+
+      const newWidth = Math.max(400, Math.min(window.innerWidth - 40, resizeStart.width + deltaX));
+      const newHeight = Math.max(300, Math.min(window.innerHeight - 40, resizeStart.height + deltaY));
+
+      setModalSize({ width: newWidth, height: newHeight });
+
+      // If user is manually resizing, exit maximized state
+      if (isMaximized) {
+        setIsMaximized(false);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    const handleKeyDown = (e) => {
+      // Allow ESC key to close modal
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'nw-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    // Add keyboard listener
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing, resizeStart, onClose]);
 
   const getScoreDisplay = (score) => {
     if (score === null || score === undefined) return 'N/A';
@@ -982,13 +1064,34 @@ const ResponseDetailModal = ({ response, onClose, formatTimestamp }) => {
 
   return (
     <div className="modal-backdrop" onClick={handleBackdropClick}>
-      <div className="response-detail-modal">
-        <div className="modal-header">
+      <div
+        ref={modalRef}
+        className="response-detail-modal resizable-modal"
+        style={{
+          width: `${modalSize.width}px`,
+          height: `${modalSize.height}px`,
+          maxWidth: 'none',
+          maxHeight: 'none'
+        }}
+      >
+        <div className="modal-header" onDoubleClick={handleMaximizeToggle}>
           <h3>📄 Response Details</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <div className="modal-header-controls">
+            <span className="modal-size-indicator">
+              {modalSize.width} × {modalSize.height}
+            </span>
+            <button
+              className="modal-maximize"
+              onClick={handleMaximizeToggle}
+              title={isMaximized ? "Restore" : "Maximize"}
+            >
+              {isMaximized ? "🗗" : "🗖"}
+            </button>
+            <button className="modal-close" onClick={onClose} title="Close">✕</button>
+          </div>
         </div>
 
-        <div className="modal-content">
+        <div className="modal-content modal-content-scrollable">
           {/* Basic Information */}
           <div className="detail-section">
             <h4>📋 Basic Information</h4>
@@ -998,12 +1101,16 @@ const ResponseDetailModal = ({ response, onClose, formatTimestamp }) => {
                 <span className="detail-value">{response.document?.filename || 'Unknown'}</span>
               </div>
               <div className="modal-detail-item">
-                <span className="detail-label">LLM Config:</span>
-                <span className="detail-value">{response.llm_config?.llm_name || 'Unknown'}</span>
+                <span className="detail-label">Connection:</span>
+                <span className="detail-value">{response.connection?.name || 'Unknown'}</span>
               </div>
               <div className="modal-detail-item">
                 <span className="detail-label">Model:</span>
-                <span className="detail-value">{response.llm_config?.model_name || 'Unknown'}</span>
+                <span className="detail-value">{response.connection?.model_name || 'Unknown'}</span>
+              </div>
+              <div className="modal-detail-item">
+                <span className="detail-label">Provider:</span>
+                <span className="detail-value">{response.connection?.provider_type || 'Unknown'}</span>
               </div>
               <div className="modal-detail-item">
                 <span className="detail-label">Status:</span>
@@ -1075,6 +1182,15 @@ const ResponseDetailModal = ({ response, onClose, formatTimestamp }) => {
               <pre>{JSON.stringify(responseData, null, 2)}</pre>
             </div>
           </div>
+        </div>
+
+        {/* Resize Handle */}
+        <div
+          className="modal-resize-handle"
+          onMouseDown={handleResizeStart}
+          title="Drag to resize"
+        >
+          ⟲
         </div>
       </div>
     </div>

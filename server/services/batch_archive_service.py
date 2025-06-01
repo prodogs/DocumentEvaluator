@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import joinedload
-from models import Batch, Document, LlmResponse, BatchArchive, Folder, Prompt, LlmConfiguration
+from models import Batch, Document, LlmResponse, BatchArchive, Folder, Prompt, Connection
 from database import Session
 
 logger = logging.getLogger(__name__)

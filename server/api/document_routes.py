@@ -6,7 +6,7 @@ from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 from sqlalchemy.sql import func
 
-from models import Document, LlmConfiguration, Prompt, LlmResponse
+from models import Document, Prompt, LlmResponse, Connection
 from database import Session
 
 document_routes = Blueprint('document_routes', __name__)
@@ -61,11 +61,11 @@ def analyze_document_with_llm():
             try:
                 session = Session()
 
-                # Get LLM configurations and prompts
-                llm_configs = session.query(LlmConfiguration).all()
+                # Get connections and prompts (replaces deprecated LlmConfiguration)
+                connections = session.query(Connection).filter(Connection.is_active == True).all()
                 prompts = session.query(Prompt).all()
 
-                if not llm_configs:
+                if not connections:
                     background_tasks[task_id]['status'] = 'ERROR'
                     background_tasks[task_id]['error'] = 'No LLM configurations found'
                     return
@@ -75,8 +75,8 @@ def analyze_document_with_llm():
                     background_tasks[task_id]['error'] = 'No prompts found'
                     return
 
-                # Process each file with each LLM configuration and prompt
-                total_combinations = len(saved_files) * len(llm_configs) * len(prompts)
+                # Process each file with each connection and prompt
+                total_combinations = len(saved_files) * len(connections) * len(prompts)
                 background_tasks[task_id]['total_files'] = total_combinations
 
                 processed_count = 0
@@ -87,13 +87,13 @@ def analyze_document_with_llm():
                     session.add(document)
                     session.commit()
 
-                    for llm_config in llm_configs:
+                    for connection in connections:
                         for prompt in prompts:
                             # Create LLM response record
                             llm_response = LlmResponse(
                                 document_id=document.id,
                                 prompt_id=prompt.id,
-                                llm_name=llm_config.llm_name,
+                                connection_id=connection.id,
                                 task_id=task_id,
                                 status='P',  # Processing
                                 started_processing_at=func.now()

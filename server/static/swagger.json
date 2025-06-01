@@ -2,51 +2,74 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Document Evaluator API",
-    "version": "1.0.0"
+    "version": "2.0.0",
+    "description": "API for document analysis and evaluation using LLM providers. Features staging workflow, connection management, and batch processing.",
+    "contact": {
+      "name": "Document Evaluator Support",
+      "email": "support@documentevaluator.com"
+    }
   },
+  "servers": [
+    {
+      "url": "http://localhost:5001",
+      "description": "Development server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "connections",
+      "description": "LLM connection management (replaces deprecated llm-configurations)"
+    },
+    {
+      "name": "staging",
+      "description": "Document staging and batch management"
+    },
+    {
+      "name": "processing",
+      "description": "Document processing and analysis"
+    },
+    {
+      "name": "folders",
+      "description": "Folder management"
+    },
+    {
+      "name": "prompts",
+      "description": "Prompt management"
+    },
+    {
+      "name": "responses",
+      "description": "LLM response management"
+    },
+    {
+      "name": "health",
+      "description": "Service health and monitoring"
+    }
+  ],
   "paths": {
-    "/api/process-db-folders": {
-      "post": {
-        "summary": "Process all files in folders from database",
-        "description": "Retrieves all folders from the database and processes all supported document files in them",
-        "tags": ["processing"],
+    "/api/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Health check endpoint",
+        "description": "Returns the health status of the API service",
         "responses": {
           "200": {
-            "description": "Processing started successfully",
+            "description": "Service is healthy",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "task_id": {
+                    "status": {
                       "type": "string",
-                      "description": "Unique identifier for the processing task"
+                      "example": "ok"
                     },
-                    "message": {
+                    "version": {
                       "type": "string",
-                      "description": "Status message about the processing task"
+                      "example": "2.0.0"
                     },
-                    "totalFiles": {
-                      "type": "integer",
-                      "description": "Total number of files to be processed"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
+                    "swagger": {
+                      "type": "string",
+                      "example": "available at /api/docs"
                     }
                   }
                 }
@@ -56,9 +79,398 @@
         }
       }
     },
+    "/api/llm-configurations": {
+      "get": {
+        "tags": ["connections"],
+        "summary": "List all connections (replaces deprecated LLM configurations)",
+        "description": "Returns all connections with provider information for backward compatibility",
+        "responses": {
+          "200": {
+            "description": "List of connections retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "llm_configurations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LLMConfiguration"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "active_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["connections"],
+        "summary": "Create a new connection",
+        "description": "Creates a new LLM connection configuration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Connection created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "config": {
+                      "$ref": "#/components/schemas/LLMConfiguration"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm-configurations/{config_id}": {
+      "put": {
+        "tags": ["connections"],
+        "summary": "Update a connection",
+        "description": "Updates an existing connection configuration",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Connection ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Connection updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "config": {
+                      "$ref": "#/components/schemas/LLMConfiguration"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["connections"],
+        "summary": "Delete a connection",
+        "description": "Deletes a connection configuration",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Connection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Connection cannot be deleted (in use)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm-configurations/{config_id}/activate": {
+      "post": {
+        "tags": ["connections"],
+        "summary": "Activate a connection",
+        "description": "Activates a connection for use in document processing",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Connection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection activated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "config_id": {
+                      "type": "integer"
+                    },
+                    "llm_name": {
+                      "type": "string"
+                    },
+                    "active": {
+                      "type": "boolean",
+                      "example": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm-configurations/{config_id}/deactivate": {
+      "post": {
+        "tags": ["connections"],
+        "summary": "Deactivate a connection",
+        "description": "Deactivates a connection to prevent its use in document processing",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Connection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection deactivated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "config_id": {
+                      "type": "integer"
+                    },
+                    "llm_name": {
+                      "type": "string"
+                    },
+                    "active": {
+                      "type": "boolean",
+                      "example": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{connection_id}/test": {
+      "post": {
+        "tags": ["connections"],
+        "summary": "Test a connection",
+        "description": "Tests a connection by making a real RAG API call with test data",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Connection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection test successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "response": {
+                      "type": "object"
+                    },
+                    "response_time_ms": {
+                      "type": "number"
+                    },
+                    "connection_name": {
+                      "type": "string"
+                    },
+                    "model_name": {
+                      "type": "string"
+                    },
+                    "provider_type": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Connection test failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "response_time_ms": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analyze_document_with_llm": {
       "post": {
+        "tags": ["processing"],
         "summary": "Analyze document with LLM",
+        "description": "Analyzes a document using specified LLM provider and prompts",
         "requestBody": {
           "required": true,
           "content": {
@@ -169,7 +581,9 @@
     },
     "/analyze_status/{task_id}": {
       "get": {
+        "tags": ["processing"],
         "summary": "Get analysis status",
+        "description": "Retrieves the status of a document analysis task",
         "parameters": [
           {
             "name": "task_id",
@@ -177,7 +591,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Task ID returned from analyze_document_with_llm"
           }
         ],
         "responses": {
@@ -186,24 +601,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "totalDocuments": {
-                      "type": "integer"
-                    },
-                    "processedDocuments": {
-                      "type": "integer"
-                    },
-                    "outstandingDocuments": {
-                      "type": "integer"
-                    },
-                    "status": {
-                      "type": "string"
-                    },
-                    "error_message": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/AnalysisStatus"
                 }
               }
             }
@@ -213,13 +611,32 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/llm-configs": {
+      "get": {
+        "tags": ["connections"],
+        "summary": "Get LLM configurations (legacy endpoint)",
+        "description": "Returns connections in legacy format for backward compatibility",
+        "responses": {
+          "200": {
+            "description": "LLM configurations retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
                   "type": "object",
                   "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
+                    "llmConfigs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LLMConfiguration"
+                      }
                     }
                   }
                 }
@@ -227,6 +644,444 @@
             }
           }
         }
+      }
+    },
+    "/api/prompts": {
+      "get": {
+        "tags": ["prompts"],
+        "summary": "List all prompts",
+        "description": "Returns all available prompts for document analysis",
+        "responses": {
+          "200": {
+            "description": "Prompts retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "prompts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Prompt"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folders": {
+      "get": {
+        "tags": ["folders"],
+        "summary": "List all folders",
+        "description": "Returns all folders in the system",
+        "responses": {
+          "200": {
+            "description": "Folders retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "folders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Folder"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm-responses": {
+      "get": {
+        "tags": ["responses"],
+        "summary": "List LLM responses",
+        "description": "Returns LLM responses with filtering and pagination",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            },
+            "description": "Maximum number of responses to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Number of responses to skip"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["N", "P", "C", "E"]
+            },
+            "description": "Filter by response status (N=New, P=Processing, C=Complete, E=Error)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "LLM responses retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "responses": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LLMResponse"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          },
+          "success": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "required": ["error"]
+      },
+      "LLMConfiguration": {
+        "type": "object",
+        "description": "LLM connection configuration (maps to connections table)",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Connection ID"
+          },
+          "llm_name": {
+            "type": "string",
+            "description": "Connection name"
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Base URL for the LLM provider"
+          },
+          "model_name": {
+            "type": "string",
+            "description": "Model name to use"
+          },
+          "provider_type": {
+            "type": "string",
+            "enum": ["ollama", "openai", "anthropic", "custom"],
+            "description": "Type of LLM provider"
+          },
+          "api_key": {
+            "type": "string",
+            "nullable": true,
+            "description": "API key for authentication (if required)"
+          },
+          "port_no": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Port number for the service"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether the connection is active"
+          }
+        },
+        "required": ["id", "llm_name", "base_url", "provider_type"]
+      },
+      "CreateConnectionRequest": {
+        "type": "object",
+        "properties": {
+          "llm_name": {
+            "type": "string",
+            "description": "Name for the connection"
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Base URL for the LLM provider"
+          },
+          "model_name": {
+            "type": "string",
+            "description": "Model name to use"
+          },
+          "provider_type": {
+            "type": "string",
+            "enum": ["ollama", "openai", "anthropic", "custom"],
+            "description": "Type of LLM provider"
+          },
+          "api_key": {
+            "type": "string",
+            "nullable": true,
+            "description": "API key for authentication (if required)"
+          },
+          "port_no": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Port number for the service"
+          }
+        },
+        "required": ["llm_name", "base_url", "provider_type"]
+      },
+      "UpdateConnectionRequest": {
+        "type": "object",
+        "properties": {
+          "llm_name": {
+            "type": "string",
+            "description": "Name for the connection"
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Base URL for the LLM provider"
+          },
+          "model_name": {
+            "type": "string",
+            "description": "Model name to use"
+          },
+          "provider_type": {
+            "type": "string",
+            "enum": ["ollama", "openai", "anthropic", "custom"],
+            "description": "Type of LLM provider"
+          },
+          "api_key": {
+            "type": "string",
+            "nullable": true,
+            "description": "API key for authentication (if required)"
+          },
+          "port_no": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Port number for the service"
+          }
+        }
+      },
+      "Prompt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Prompt ID"
+          },
+          "prompt_text": {
+            "type": "string",
+            "description": "The prompt text to send to the LLM"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of the prompt"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether the prompt is active"
+          }
+        },
+        "required": ["id", "prompt_text", "description"]
+      },
+      "Folder": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Folder ID"
+          },
+          "folder_path": {
+            "type": "string",
+            "description": "Path to the folder"
+          },
+          "folder_name": {
+            "type": "string",
+            "description": "Name of the folder"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether the folder is active for processing"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["NOT_PROCESSED", "PROCESSING", "READY", "ERROR"],
+            "description": "Processing status of the folder"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the folder was created"
+          }
+        },
+        "required": ["id", "folder_path", "folder_name", "active"]
+      },
+      "LLMResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Response ID"
+          },
+          "document_id": {
+            "type": "integer",
+            "description": "ID of the document that was processed"
+          },
+          "task_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Task ID from the RAG service"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["N", "P", "C", "E", "F"],
+            "description": "Response status (N=New, P=Processing, C=Complete, E=Error, F=Failed)"
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/Prompt",
+            "description": "The prompt that was used"
+          },
+          "connection": {
+            "$ref": "#/components/schemas/LLMConfiguration",
+            "description": "The connection that was used"
+          },
+          "response_text": {
+            "type": "string",
+            "nullable": true,
+            "description": "The response text from the LLM"
+          },
+          "response_json": {
+            "type": "object",
+            "nullable": true,
+            "description": "Full response JSON from the LLM"
+          },
+          "response_time_ms": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Response time in milliseconds"
+          },
+          "overall_score": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Overall suitability score (0-100)"
+          },
+          "error_message": {
+            "type": "string",
+            "nullable": true,
+            "description": "Error message if processing failed"
+          },
+          "started_processing_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When processing started"
+          },
+          "completed_processing_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When processing completed"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the response was created"
+          }
+        },
+        "required": ["id", "document_id", "status"]
+      },
+      "AnalysisStatus": {
+        "type": "object",
+        "properties": {
+          "totalDocuments": {
+            "type": "integer",
+            "description": "Total number of documents in the task"
+          },
+          "processedDocuments": {
+            "type": "integer",
+            "description": "Number of documents that have been processed"
+          },
+          "outstandingDocuments": {
+            "type": "integer",
+            "description": "Number of documents still being processed"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "processing", "completed", "failed"],
+            "description": "Overall status of the analysis task"
+          },
+          "error_message": {
+            "type": "string",
+            "nullable": true,
+            "description": "Error message if the task failed"
+          },
+          "progress_percentage": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Progress percentage (0-100)"
+          }
+        },
+        "required": ["totalDocuments", "processedDocuments", "outstandingDocuments", "status"]
+      },
+      "LLMProviderData": {
+        "type": "object",
+        "description": "LLM provider configuration for RAG API calls",
+        "properties": {
+          "provider_type": {
+            "type": "string",
+            "enum": ["ollama", "openai", "anthropic", "custom"],
+            "description": "Type of LLM provider"
+          },
+          "url": {
+            "type": "string",
+            "description": "Base URL for the provider (note: 'url' not 'base_url' for RAG API)"
+          },
+          "model_name": {
+            "type": "string",
+            "description": "Model name to use"
+          },
+          "api_key": {
+            "type": "string",
+            "nullable": true,
+            "description": "API key for authentication (if required)"
+          },
+          "port_no": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Port number for the service"
+          }
+        },
+        "required": ["provider_type", "url", "model_name"]
       }
     }
   }

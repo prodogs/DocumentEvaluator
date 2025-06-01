@@ -40,7 +40,7 @@ def create_app():
         # Import all models to register them (temporarily reduced due to missing models)
         from models import (
             Batch, Folder, Doc, Document, Prompt,
-            LlmConfiguration, LlmResponse, BatchArchive
+            Connection, LlmResponse, BatchArchive
         )
         
         # Create all tables

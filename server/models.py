@@ -1,11 +1,12 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, LargeBinary, Float, Boolean
+from sqlalchemy import Column, Integer, Text, DateTime, ForeignKey, JSON, LargeBinary, Float, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import JSONB
 from database import Base
 
 # Ensure we're using the correct Base class and avoid naming conflicts
 __all__ = [
-    'Batch', 'Folder', 'Doc', 'Document', 'Prompt', 'LlmConfiguration',
+    'Batch', 'Folder', 'Doc', 'Document', 'Prompt',
     'LlmResponse', 'BatchArchive', 'LlmProvider', 'Model', 'ProviderModel',
     'ModelAlias', 'LlmModel', 'Connection'
 ]
@@ -20,11 +21,11 @@ class Batch(Base):
     created_at = Column(DateTime, default=func.now())  # When batch was created
     started_at = Column(DateTime, nullable=True)  # When processing actually started
     completed_at = Column(DateTime, nullable=True)  # When processing completed
-    status = Column(Text, default='SAVED', nullable=False)  # SAVED, READY_FOR_STAGING, STAGING, STAGED, FAILED_STAGING, ANALYZING, COMPLETED
+    status = Column(Text, default='P', nullable=False)  # P = Pending, SAVED, READY_FOR_STAGING, STAGING, STAGED, FAILED_STAGING, ANALYZING, COMPLETED
     total_documents = Column(Integer, default=0)
     processed_documents = Column(Integer, default=0)
     folder_path = Column(Text, nullable=True)  # Legacy: Path that was processed (deprecated)
-    folder_ids = Column(JSON, nullable=True)  # Deprecated: JSON array of folder IDs (replaced by config_snapshot)
+    folder_ids = Column(JSONB, nullable=True)  # Deprecated: JSON array of folder IDs (replaced by config_snapshot)
     meta_data = Column(JSON, nullable=True)  # JSON metadata to be sent to LLM for context
     config_snapshot = Column(JSON, nullable=True)  # Complete configuration snapshot at batch creation time
 
@@ -67,7 +68,7 @@ class Document(Base):
     folder_id = Column(Integer, ForeignKey('folders.id'), nullable=True)
     batch_id = Column(Integer, ForeignKey('batches.id'), nullable=True)  # Link to batch
     doc_id = Column(Integer, ForeignKey('docs.id'), nullable=True)  # Link to encoded document content
-    meta_data = Column(JSON, default={'meta_data': 'NONE'}, nullable=True)  # Fixed: DB allows null
+    meta_data = Column(JSONB, default={}, nullable=True)  # Fixed: DB allows null, use JSONB for PostgreSQL
     valid = Column(Text, default='Y', nullable=False)  # Y = valid, N = invalid (for folder preprocessing)
     created_at = Column(DateTime, default=func.now())
     task_id = Column(Text, nullable=True)  # Task ID for LLM processing recovery
@@ -117,7 +118,7 @@ class Model(Base):
     context_length = Column(Integer)
     capabilities = Column(Text)
     notes = Column(Text)
-    is_globally_active = Column(Boolean, default=False, nullable=False)
+    is_globally_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now())
 
@@ -167,22 +168,7 @@ class LlmModel(Base):
     capabilities = Column(Text)
     last_updated = Column(DateTime, default=func.now())
 
-class LlmConfiguration(Base):
-    __tablename__ = 'llm_configurations'
-    __table_args__ = {'extend_existing': True}
-    id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # Core fields that exist in the database
-    llm_name = Column(Text, nullable=False)  # Primary name field in current schema
-    base_url = Column(Text)
-    model_name = Column(Text, nullable=True)  # Fixed: DB allows null
-    api_key = Column(Text)
-    provider_type = Column(Text, nullable=False)  # Fixed: DB requires not null
-    port_no = Column(Integer)
-    active = Column(Integer, default=1, nullable=True)  # Fixed: DB allows null
-    created_at = Column(DateTime, nullable=True)
-
-    # Note: LlmConfiguration is deprecated - use Connection model instead
 
 class LlmResponse(Base):
     __tablename__ = 'llm_responses'
@@ -194,8 +180,11 @@ class LlmResponse(Base):
     # Use connections instead of deprecated llm_configurations
     connection_id = Column(Integer, ForeignKey('connections.id'), nullable=False)
 
+    # Store connection details snapshot to preserve info if connection is deleted/modified
+    connection_details = Column(JSONB, nullable=True)
+
     task_id = Column(Text)
-    status = Column(Text, default='R', nullable=True)  # Fixed: DB allows null
+    status = Column(Text, default='N', nullable=True)  # N = Not started, Fixed: DB allows null
     started_processing_at = Column(DateTime)
     completed_processing_at = Column(DateTime)
     response_json = Column(Text)
@@ -248,7 +237,7 @@ class Connection(Base):
     base_url = Column(Text)
     api_key = Column(Text)
     port_no = Column(Integer)
-    connection_config = Column(Text)
+    connection_config = Column(JSONB)
     is_active = Column(Boolean, default=True, nullable=False)
     connection_status = Column(Text, default='unknown', nullable=False)
     last_tested = Column(DateTime, nullable=True)
@@ -261,4 +250,6 @@ class Connection(Base):
     updated_at = Column(DateTime, default=func.now())
 
     # Relationships
+    provider = relationship("LlmProvider", foreign_keys=[provider_id])
+    model = relationship("Model", foreign_keys=[model_id])
     llm_responses = relationship("LlmResponse", back_populates="connection")
