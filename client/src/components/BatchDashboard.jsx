@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
-
 const BatchDashboard = () => {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -13,7 +11,7 @@ const BatchDashboard = () => {
 
   const fetchDashboardData = async (batchIds = null) => {
     try {
-      let url = `${API_BASE_URL}/api/batches/dashboard`;
+      let url = `/api/batches/dashboard`;
       if (batchIds && batchIds.length > 0) {
         url += `?batch_ids=${batchIds.join(',')}`;
       }
@@ -82,7 +80,7 @@ const BatchDashboard = () => {
     setBatchActionLoading(`pause-${batchId}`);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/pause`);
+      const response = await axios.post(`/api/batches/${batchId}/pause`);
       if (response.data.success) {
         // Immediately update the batch status in the dashboard data for instant feedback
         setDashboardData(prevData => ({
@@ -109,7 +107,7 @@ const BatchDashboard = () => {
     setBatchActionLoading(`resume-${batchId}`);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/resume`);
+      const response = await axios.post(`/api/batches/${batchId}/resume`);
       if (response.data.success) {
         // Immediately update the batch status in the dashboard data for instant feedback
         setDashboardData(prevData => ({
@@ -138,7 +136,7 @@ const BatchDashboard = () => {
     }
 
     try {
-      const response = await axios.delete(`${API_BASE_URL}/api/batches/${batchId}`, {
+      const response = await axios.delete(`/api/batches/${batchId}`, {
         headers: {
           'Content-Type': 'application/json'
         },

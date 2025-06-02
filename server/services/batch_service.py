@@ -435,23 +435,55 @@ class BatchService:
                                 with open(document.filepath, 'rb') as file:
                                     file_content = file.read()
 
+                                # Check file size before encoding
+                                file_size = len(file_content)
+                                logger.info(f"📄 File size: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)")
+                                
                                 # Determine MIME type and doc type
                                 content_type = mimetypes.guess_type(document.filepath)[0] or 'application/octet-stream'
                                 _, ext = os.path.splitext(document.filepath.lower())
                                 doc_type = ext[1:] if ext.startswith('.') else ext
 
                                 # Encode content as base64 and decode to string
-                                encoded_content = base64.b64encode(file_content).decode('utf-8')
+                                try:
+                                    encoded_content = base64.b64encode(file_content).decode('utf-8')
+                                    logger.info(f"📄 Encoded content length: {len(encoded_content)} characters")
+                                    
+                                    # Validate the encoded content
+                                    if len(encoded_content) == 1398101:
+                                        logger.warning(f"⚠️ Document has exactly 1398101 characters - checking for corruption")
+                                        # Try to decode it back to verify it's valid
+                                        try:
+                                            test_decode = base64.b64decode(encoded_content)
+                                            logger.info(f"✅ Base64 validation passed")
+                                        except Exception as decode_error:
+                                            logger.error(f"❌ Base64 validation failed: {decode_error}")
+                                            # Try to fix padding
+                                            missing_padding = len(encoded_content) % 4
+                                            if missing_padding:
+                                                encoded_content += '=' * (4 - missing_padding)
+                                                logger.info(f"🔧 Added {4 - missing_padding} padding characters")
+                                except Exception as encode_error:
+                                    logger.error(f"❌ Failed to encode file content: {encode_error}")
+                                    failed_count += 1
+                                    continue
 
                                 # Connect to KnowledgeDocuments database
-                                conn = psycopg2.connect(
-                                    host="studio.local",
-                                    database="KnowledgeDocuments",
-                                    user="postgres",
-                                    password="prodogs03",
-                                    port=5432
-                                )
-                                cursor = conn.cursor()
+                                conn = None
+                                cursor = None
+                                try:
+                                    conn = psycopg2.connect(
+                                        host="studio.local",
+                                        database="KnowledgeDocuments",
+                                        user="postgres",
+                                        password="prodogs03",
+                                        port=5432
+                                    )
+                                    cursor = conn.cursor()
+                                except Exception as db_error:
+                                    logger.error(f"❌ Failed to connect to KnowledgeDocuments database: {db_error}")
+                                    failed_count += 1
+                                    continue
 
                                 # Create unique document_id for this batch document
                                 unique_doc_id = f"batch_{batch.id}_doc_{document.id}"
@@ -465,24 +497,41 @@ class BatchService:
                                     logger.info(f"📄 Document already exists in KnowledgeDocuments database with ID: {doc_id}")
                                 else:
                                     # Insert document into docs table using correct column names
-                                    cursor.execute("""
-                                        INSERT INTO docs (content, content_type, doc_type, file_size, encoding, created_at, document_id)
-                                        VALUES (%s, %s, %s, %s, %s, NOW(), %s)
-                                        RETURNING id
-                                    """, (
-                                        encoded_content,
-                                        content_type,
-                                        doc_type,
-                                        len(file_content),
-                                        'base64',
-                                        unique_doc_id
-                                    ))
-                                    doc_id = cursor.fetchone()[0]
-                                    conn.commit()
-                                    logger.info(f"✅ Document created in KnowledgeDocuments database with ID: {doc_id}")
+                                    try:
+                                        # Log the size of data being inserted
+                                        logger.info(f"📊 Inserting document: content_length={len(encoded_content)}, file_size={file_size}")
+                                        
+                                        cursor.execute("""
+                                            INSERT INTO docs (content, content_type, doc_type, file_size, encoding, created_at, document_id)
+                                            VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                                            RETURNING id
+                                        """, (
+                                            encoded_content,
+                                            content_type,
+                                            doc_type,
+                                            file_size,  # Use the variable we calculated earlier
+                                            'base64',
+                                            unique_doc_id
+                                        ))
+                                        doc_id = cursor.fetchone()[0]
+                                        conn.commit()
+                                        logger.info(f"✅ Document created in KnowledgeDocuments database with ID: {doc_id}")
+                                    except Exception as insert_error:
+                                        logger.error(f"❌ Failed to insert document into KnowledgeDocuments database: {insert_error}")
+                                        logger.error(f"📏 Document details: file={document.filepath}, encoded_size={len(encoded_content)}, file_size={file_size}")
+                                        if conn:
+                                            conn.rollback()
+                                        failed_count += 1
+                                        if cursor:
+                                            cursor.close()
+                                        if conn:
+                                            conn.close()
+                                        continue
 
-                                cursor.close()
-                                conn.close()
+                                if cursor:
+                                    cursor.close()
+                                if conn:
+                                    conn.close()
 
                                 # Now send to RAG API with the doc_id
                                 # IMPORTANT: Use exact configuration from database - NEVER modify values
@@ -1878,7 +1927,49 @@ class BatchService:
             # Get document count
             document_count = session.query(Document).filter_by(batch_id=batch_id).count()
 
-            # LLM response statistics moved to KnowledgeDocuments database
+            # Get LLM response statistics from KnowledgeDocuments database
+            total_responses = 0
+            status_counts = {}
+            completion_percentage = 0
+            
+            try:
+                import psycopg2
+                kb_conn = psycopg2.connect(
+                    host="studio.local",
+                    database="KnowledgeDocuments",
+                    user="postgres",
+                    password="prodogs03",
+                    port=5432
+                )
+                kb_cursor = kb_conn.cursor()
+                
+                # Get total count of LLM responses for this batch
+                kb_cursor.execute("SELECT COUNT(*) FROM llm_responses WHERE batch_id = %s", (batch_id,))
+                total_responses = kb_cursor.fetchone()[0]
+                
+                # Get status counts
+                kb_cursor.execute("""
+                    SELECT status, COUNT(*) 
+                    FROM llm_responses 
+                    WHERE batch_id = %s 
+                    GROUP BY status
+                """, (batch_id,))
+                
+                for status, count in kb_cursor.fetchall():
+                    status_counts[status] = count
+                
+                # Calculate completion percentage
+                completed_count = status_counts.get('S', 0) + status_counts.get('F', 0)
+                if total_responses > 0:
+                    completion_percentage = round((completed_count / total_responses) * 100)
+                
+                kb_cursor.close()
+                kb_conn.close()
+                
+            except Exception as kb_error:
+                logger.warning(f"Could not fetch LLM response statistics from KnowledgeDocuments: {kb_error}")
+                # Continue with default values if KnowledgeDocuments is not accessible
+
             return {
                 'id': batch.id,
                 'batch_number': batch.batch_number,
@@ -1888,10 +1979,9 @@ class BatchService:
                 'created_at': batch.created_at.isoformat() if batch.created_at else None,
                 'completed_at': batch.completed_at.isoformat() if batch.completed_at else None,
                 'total_documents': document_count,
-                'total_responses': 0,  # LLM response data moved to KnowledgeDocuments database
-                'status_counts': {},  # LLM response data moved to KnowledgeDocuments database
-                'completion_percentage': 0,  # LLM response data moved to KnowledgeDocuments database
-                'deprecated_notice': 'LLM response statistics moved to KnowledgeDocuments database'
+                'total_responses': total_responses,
+                'status_counts': status_counts,
+                'completion_percentage': completion_percentage
             }
 
         except Exception as e:
@@ -1902,25 +1992,67 @@ class BatchService:
 
     def list_batches(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
-        List recent batches with summary information - LLM response data moved to KnowledgeDocuments database
+        List recent batches with summary information - includes LLM response data from KnowledgeDocuments database
 
         Args:
             limit (int): Maximum number of batches to return
 
         Returns:
-            list: List of batch summaries (without LLM response completion data)
+            list: List of batch summaries with completion data
         """
         session = Session()
         try:
             batches = session.query(Batch).order_by(Batch.created_at.desc()).limit(limit).all()
+
+            # Get all batch IDs for bulk query
+            batch_ids = [batch.id for batch in batches]
+            
+            # Get LLM response statistics from KnowledgeDocuments database
+            batch_stats = {}
+            try:
+                if batch_ids:
+                    import psycopg2
+                    kb_conn = psycopg2.connect(
+                        host="studio.local",
+                        database="KnowledgeDocuments",
+                        user="postgres",
+                        password="prodogs03",
+                        port=5432
+                    )
+                    kb_cursor = kb_conn.cursor()
+                    
+                    # Get total responses and completion counts for all batches in one query
+                    kb_cursor.execute("""
+                        SELECT 
+                            batch_id,
+                            COUNT(*) as total,
+                            SUM(CASE WHEN status IN ('S', 'F') THEN 1 ELSE 0 END) as completed
+                        FROM llm_responses 
+                        WHERE batch_id = ANY(%s)
+                        GROUP BY batch_id
+                    """, (batch_ids,))
+                    
+                    for batch_id, total, completed in kb_cursor.fetchall():
+                        completion_percentage = round((completed / total * 100)) if total > 0 else 0
+                        batch_stats[batch_id] = {
+                            'total_responses': total,
+                            'completion_percentage': completion_percentage
+                        }
+                    
+                    kb_cursor.close()
+                    kb_conn.close()
+                    
+            except Exception as kb_error:
+                logger.warning(f"Could not fetch LLM response statistics from KnowledgeDocuments: {kb_error}")
 
             batch_list = []
             for batch in batches:
                 # Get document count for this batch
                 document_count = session.query(Document).filter_by(batch_id=batch.id).count()
 
-                # LLM response completion data moved to KnowledgeDocuments database
-                # Return basic batch information without completion percentages
+                # Get stats from our bulk query, or use defaults
+                stats = batch_stats.get(batch.id, {'total_responses': 0, 'completion_percentage': 0})
+                
                 batch_list.append({
                     'id': batch.id,
                     'batch_number': batch.batch_number,
@@ -1928,8 +2060,8 @@ class BatchService:
                     'status': batch.status,
                     'created_at': batch.created_at.isoformat() if batch.created_at else None,
                     'total_documents': document_count,
-                    'completion_percentage': 0,  # LLM response data moved to KnowledgeDocuments database
-                    'deprecated_notice': 'LLM response completion data moved to KnowledgeDocuments database'
+                    'total_responses': stats['total_responses'],
+                    'completion_percentage': stats['completion_percentage']
                 })
 
             return batch_list

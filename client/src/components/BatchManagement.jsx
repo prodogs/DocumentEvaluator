@@ -628,15 +628,65 @@ const BatchManagement = ({ onNavigateBack }) => {
           style={{ width: `${leftPaneWidth}px` }}
         >
           <div className="batch-list-header">
-            <h3>Batches ({batches.length})</h3>
+            <h3>Batches ({getFilteredBatches().length})</h3>
+          </div>
+
+          {/* Search and Filter Controls */}
+          <div className="batch-filters">
+            <div className="search-container">
+              <span className="search-icon">🔍</span>
+              <input
+                type="text"
+                placeholder="Search by name, ID, or batch number..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="search-input"
+              />
+            </div>
+            
+            <div className="filter-controls">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="filter-select"
+              >
+                <option value="all">All Status</option>
+                <option value="SAVED">💾 Saved</option>
+                <option value="STAGING">⚙️ Staging</option>
+                <option value="STAGED">✅ Staged</option>
+                <option value="ANALYZING">🔄 Analyzing</option>
+                <option value="COMPLETED">✅ Completed</option>
+                <option value="FAILED_STAGING">❌ Failed Staging</option>
+                <option value="FAILED">❌ Failed</option>
+                <option value="PAUSED">⏸️ Paused</option>
+              </select>
+              
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="sort-select"
+              >
+                <option value="created_desc">Newest First</option>
+                <option value="created_asc">Oldest First</option>
+                <option value="name_asc">Name (A-Z)</option>
+                <option value="name_desc">Name (Z-A)</option>
+                <option value="progress">Progress</option>
+              </select>
+            </div>
           </div>
 
           {loading && !batches.length ? (
             <div className="loading">Loading batches...</div>
-          ) : batches.length === 0 ? (
+          ) : getFilteredBatches().length === 0 ? (
             <div className="no-batches">
-              <p>🆕 No batches found.</p>
-              <p>Create your first batch using the "🔍 Analyze Documents" tab!</p>
+              {batches.length === 0 ? (
+                <>
+                  <p>🆕 No batches found.</p>
+                  <p>Create your first batch using the "🔍 Analyze Documents" tab!</p>
+                </>
+              ) : (
+                <p>No batches match your search criteria.</p>
+              )}
             </div>
           ) : (
             <div className="batch-table-container">
@@ -651,7 +701,7 @@ const BatchManagement = ({ onNavigateBack }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {batches.map(batch => {
+                  {getFilteredBatches().map(batch => {
                     const statusInfo = getStatusDisplay(batch.status);
                     const progress = getProgressPercentage(batch);
 
@@ -730,6 +780,11 @@ const BatchManagement = ({ onNavigateBack }) => {
               progressMessage={progressMessage}
               formatTimestamp={formatTimestamp}
               getStatusDisplay={getStatusDisplay}
+              getFilteredResponses={getFilteredResponses}
+              responseStatusFilter={responseStatusFilter}
+              setResponseStatusFilter={setResponseStatusFilter}
+              scoreFilter={scoreFilter}
+              setScoreFilter={setScoreFilter}
             />
           )}
         </div>
@@ -767,11 +822,15 @@ const BatchDetails = ({
   actionLoading,
   progressMessage,
   formatTimestamp,
-  getStatusDisplay
+  getStatusDisplay,
+  getFilteredResponses,
+  responseStatusFilter,
+  setResponseStatusFilter,
+  scoreFilter,
+  setScoreFilter
 }) => {
   const statusInfo = getStatusDisplay(batch.status);
   const totalResponses = batch.total_responses || 0;
-  const completedResponses = (batch.status_counts?.S || 0) + (batch.status_counts?.F || 0);
   const progressPercent = batch.completion_percentage || 0;
 
   return (
@@ -952,17 +1011,65 @@ const BatchDetails = ({
 
       {/* LLM Responses */}
       <div className="details-section">
-        <h4>🔍 LLM Responses ({llmResponses.length})</h4>
+        <div className="responses-header">
+          <h4>🔍 LLM Responses ({getFilteredResponses().length})</h4>
+          
+          {/* Response Filters */}
+          {llmResponses.length > 0 && (
+            <div className="response-filters">
+              <select
+                value={responseStatusFilter}
+                onChange={(e) => setResponseStatusFilter(e.target.value)}
+                className="response-filter-select"
+              >
+                <option value="all">All Status</option>
+                <option value="S">✅ Success</option>
+                <option value="F">❌ Failed</option>
+                <option value="P">🔄 Processing</option>
+                <option value="N">⏳ Waiting</option>
+              </select>
+              
+              {/* Score Range Filter */}
+              <div className="score-filter">
+                <label>Score:</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={scoreFilter.min}
+                  onChange={(e) => setScoreFilter({ ...scoreFilter, min: parseInt(e.target.value) || 0 })}
+                  className="score-input"
+                  placeholder="Min"
+                />
+                <span>-</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={scoreFilter.max}
+                  onChange={(e) => setScoreFilter({ ...scoreFilter, max: parseInt(e.target.value) || 100 })}
+                  className="score-input"
+                  placeholder="Max"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+        
         {responsesLoading && llmResponses.length === 0 ? (
           <div className="loading">Loading responses...</div>
         ) : llmResponses.length === 0 ? (
           <div className="no-responses">
             <p>No LLM responses found for this batch.</p>
           </div>
+        ) : getFilteredResponses().length === 0 ? (
+          <div className="no-responses">
+            <p>No responses match your filter criteria.</p>
+          </div>
         ) : (
           <div className="responses-container">
             <div className="responses-list">
-              {llmResponses.map(response => (
+              {getFilteredResponses().map(response => (
                 <LlmResponseItem
                   key={response.id}
                   response={response}

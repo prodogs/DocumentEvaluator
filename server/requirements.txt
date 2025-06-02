@@ -1,6 +1,20 @@
-Flask
-Flask-CORS
-SQLAlchemy
-python-dotenv
-requests
-python-magic # For file type detection
+Flask==2.3.3
+Flask-CORS==4.0.0
+SQLAlchemy==2.0.21
+python-dotenv==1.0.0
+requests==2.31.0
+python-magic==0.4.27  # For file type detection
+
+# New dependencies for improvements
+redis==5.0.0  # Redis client for caching
+python-json-logger==2.0.7  # Structured JSON logging
+aiohttp==3.8.5  # Async HTTP client
+asyncio==3.4.3  # Async support
+psycopg2-binary==2.9.7  # PostgreSQL adapter
+alembic==1.12.0  # Database migrations
+
+# Optional performance dependencies
+ujson==5.8.0  # Faster JSON parsing
+msgpack==1.0.5  # Alternative serialization
+gunicorn==21.2.0  # Production WSGI server
+gevent==23.9.1  # Async worker class for gunicorn
