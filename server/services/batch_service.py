@@ -863,157 +863,260 @@ class BatchService:
             session.close()
 
     def restage_and_rerun_batch(self, batch_id: int) -> Dict[str, Any]:
+        """DEPRECATED: Use rerun_batch instead - restage_and_rerun is redundant"""
+        logger.warning("restage_and_rerun_batch is deprecated. Use rerun_batch instead.")
+        return self.rerun_batch(batch_id)
+
+    def rerun_batch(self, batch_id: int) -> Dict[str, Any]:
         """
-        Restage and rerun analysis for a completed batch
-        - Validates batch is in COMPLETED status
-        - Deletes all existing LLM responses
-        - Refreshes documents and docs (checks for file changes)
-        - Recreates LLM responses for all connection/prompt combinations
-        - Updates batch status and timing
-        - Initiates LLM processing for all new responses
-
+        Rerun analysis for a batch following the complete workflow:
+        1. Delete all llm_responses associated with batch
+        2. Recreate llm_response shells  
+        3. Refresh documents replacing records where files have newer timestamp
+        4. Refresh docs replacing records where files have newer timestamp
+        5. Run Analysis on Batch
+        
         Args:
-            batch_id (int): ID of the batch to restage and rerun
-
+            batch_id (int): ID of the batch to rerun
+            
         Returns:
             Dict[str, Any]: Execution results and status
         """
-        session = Session()
-
+        logger.info(f"🔄 RERUN: Starting complete rerun analysis for batch {batch_id}")
+        
         try:
-            # Get the batch
+            session = Session()
+            
+            # Get the batch and validate it exists
             batch = session.query(Batch).filter(Batch.id == batch_id).first()
             if not batch:
+                session.close()
                 return {'success': False, 'error': f'Batch {batch_id} not found'}
-
-            # Only allow restaging completed batches
-            if batch.status != 'COMPLETED':
-                return {'success': False, 'error': f'Batch {batch_id} is not completed (current: {batch.status}). Only completed batches can be restaged.'}
-
-            logger.info(f"🔄 RESTAGE: Starting restage and rerun of completed batch #{batch.batch_number}")
-
-            # Step 1: Delete all existing LLM responses for this batch from KnowledgeDocuments database
-            import psycopg2
-            deleted_responses_count = 0
             
-            try:
-                # Connect to KnowledgeDocuments database
-                kb_conn = psycopg2.connect(
-                    host="studio.local",
-                    database="KnowledgeDocuments",
-                    user="postgres",
-                    password="prodogs03",
-                    port=5432
-                )
-                kb_cursor = kb_conn.cursor()
-                
-                # Delete LLM responses for this batch
-                kb_cursor.execute("""
-                    DELETE FROM llm_responses 
-                    WHERE batch_id = %s
-                """, (batch_id,))
-                
-                deleted_responses_count = kb_cursor.rowcount
-                kb_conn.commit()
-                kb_cursor.close()
-                kb_conn.close()
-                
-                logger.info(f"🗑️ RESTAGE: Deleted {deleted_responses_count} existing LLM responses from KnowledgeDocuments database")
-                
-            except Exception as e:
-                logger.error(f"Error deleting LLM responses from KnowledgeDocuments: {e}")
-                # Continue anyway as this might be a new batch
-
-            # Step 2: Get batch configuration for restaging
-            config_snapshot = batch.config_snapshot or {}
-            connection_ids = [config['id'] for config in config_snapshot.get('connections', [])]
-            if not connection_ids:
-                # Fallback to old format for backward compatibility
-                connection_ids = [config['id'] for config in config_snapshot.get('llm_configurations', [])]
-            prompt_ids = [prompt['id'] for prompt in config_snapshot.get('prompts', [])]
-            folder_ids = batch.folder_ids or []
-
-            if not connection_ids or not prompt_ids:
-                return {'success': False, 'error': 'Batch configuration is incomplete - missing connections or prompts'}
-
-            # Step 3: Refresh documents and docs (check for file changes)
-            from services.staging_service import StagingService
-            from services.document_encoding_service import DocumentEncodingService
-
-            staging_service = StagingService()
-            encoding_service = DocumentEncodingService()
-
-            # Update batch status to STAGING for restaging
-            batch.status = 'STAGING'
-            batch.started_at = func.now()
-            batch.completed_at = None
-            batch.processed_documents = 0
-
-            session.commit()
-
-            logger.info(f"🔄 RESTAGE: Starting document refresh and restaging for batch #{batch.batch_number}")
-
-            # Step 4: Perform restaging (this will refresh documents and create new LLM responses)
-            staging_results = staging_service._perform_staging(
-                session, batch_id, folder_ids, connection_ids, prompt_ids, encoding_service
+            logger.info(f"🔄 Found batch #{batch.batch_number} - {batch.batch_name}")
+            
+            # Step 1: Delete all llm_responses associated with batch from KnowledgeDocuments
+            import psycopg2
+            import json
+            
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
             )
-
-            if not staging_results['success']:
-                batch.status = 'FAILED_STAGING'
-                session.commit()
+            kb_cursor = kb_conn.cursor()
+            
+            # Step 1: Delete ALL existing LLM responses for this batch
+            # First, count what we have
+            kb_cursor.execute("SELECT COUNT(*) FROM llm_responses WHERE batch_id = %s", (batch_id,))
+            before_count = kb_cursor.fetchone()[0]
+            logger.info(f"🔍 Found {before_count} existing LLM responses for batch {batch_id}")
+            
+            # Delete all responses
+            kb_cursor.execute("DELETE FROM llm_responses WHERE batch_id = %s", (batch_id,))
+            deleted_responses = kb_cursor.rowcount
+            
+            # Verify deletion
+            kb_cursor.execute("SELECT COUNT(*) FROM llm_responses WHERE batch_id = %s", (batch_id,))
+            after_count = kb_cursor.fetchone()[0]
+            
+            logger.info(f"🗑️ Deleted {deleted_responses} LLM responses")
+            logger.info(f"🔍 Verification: {before_count} → {after_count} responses remaining")
+            
+            if after_count > 0:
+                logger.warning(f"⚠️ Warning: {after_count} LLM responses still remain for batch {batch_id}")
+                # Try a more aggressive delete
+                kb_cursor.execute("DELETE FROM llm_responses WHERE batch_id = %s", (batch_id,))
+                additional_deleted = kb_cursor.rowcount
+                if additional_deleted > 0:
+                    logger.info(f"🗑️ Deleted {additional_deleted} additional responses on second attempt")
+                    deleted_responses += additional_deleted
+            
+            # Step 3: Refresh documents - check for newer files and update records
+            documents = session.query(Document).filter(Document.batch_id == batch_id).all()
+            logger.info(f"📄 Checking {len(documents)} documents for file updates")
+            
+            refreshed_docs = 0
+            for doc in documents:
+                if os.path.exists(doc.filepath):
+                    file_mtime = os.path.getmtime(doc.filepath)
+                    file_modified = datetime.fromtimestamp(file_mtime)
+                    
+                    # If file is newer than document record, we'll refresh it in KB docs
+                    # Document model only has created_at, so compare against that
+                    # Handle timezone-aware comparison
+                    doc_created = doc.created_at
+                    if doc_created and hasattr(doc_created, 'replace'):
+                        doc_created = doc_created.replace(tzinfo=None)
+                    
+                    if not doc_created or file_modified > doc_created:
+                        logger.info(f"📄 Document file is newer: {doc.filename}")
+                        refreshed_docs += 1
+                else:
+                    logger.warning(f"⚠️ File not found for document: {doc.filepath}")
+            
+            logger.info(f"📄 Found {refreshed_docs} documents with newer files")
+            
+            # Step 4: Refresh docs in KnowledgeDocuments - re-encode files with newer timestamps
+            refreshed_kb_docs = 0
+            for doc in documents:
+                if not os.path.exists(doc.filepath):
+                    continue
+                    
+                file_mtime = os.path.getmtime(doc.filepath)
+                file_modified = datetime.fromtimestamp(file_mtime)
+                
+                # Check if we need to refresh the KB doc
+                doc_id = f"batch_{batch_id}_doc_{doc.id}"
+                kb_cursor.execute("SELECT created_at FROM docs WHERE document_id = %s", (doc_id,))
+                kb_result = kb_cursor.fetchone()
+                
+                kb_created = kb_result[0] if kb_result else None
+                if kb_created and hasattr(kb_created, 'replace'):
+                    kb_created = kb_created.replace(tzinfo=None)
+                
+                if not kb_created or file_modified > kb_created:
+                    logger.info(f"📄 Refreshing KB doc: {doc.filename}")
+                    
+                    # Re-read and encode the file
+                    with open(doc.filepath, 'rb') as f:
+                        file_content = f.read()
+                    
+                    import base64
+                    encoded_content = base64.b64encode(file_content).decode('utf-8')
+                    
+                    # Clean encoded content - ensure it's valid base64
+                    encoded_content = encoded_content.strip()
+                    if len(encoded_content) % 4 != 0:
+                        encoded_content += '=' * (4 - len(encoded_content) % 4)
+                    
+                    # Update the docs table
+                    kb_cursor.execute("""
+                        INSERT INTO docs (document_id, content, content_type, doc_type, file_size, encoding, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (document_id) DO UPDATE
+                        SET content = EXCLUDED.content,
+                            file_size = EXCLUDED.file_size,
+                            created_at = NOW()
+                    """, (
+                        doc_id,
+                        encoded_content,
+                        'text/plain',
+                        os.path.splitext(doc.filename)[1][1:] if '.' in doc.filename else 'txt',
+                        len(file_content),
+                        'base64'
+                    ))
+                    refreshed_kb_docs += 1
+            
+            logger.info(f"📄 Refreshed {refreshed_kb_docs} KB document records")
+            
+            # Step 2: Recreate llm_response shells from batch configuration
+            if not batch.config_snapshot:
+                session.close()
+                kb_conn.close()
                 return {
                     'success': False,
-                    'error': f'Restaging failed: {staging_results.get("error", "Unknown error")}',
-                    'batch_id': batch_id
+                    'error': 'Batch has no configuration snapshot. Cannot recreate LLM responses.'
                 }
-
-            # Step 5: Update batch status to STAGED and then start processing
-            batch.status = 'STAGED'
-            batch.total_documents = staging_results['total_documents']
+            
+            config = batch.config_snapshot
+            connection_ids = [c['id'] for c in config.get('connections', [])]
+            prompt_ids = [p['id'] for p in config.get('prompts', [])]
+            
+            logger.info(f"🔄 Recreating LLM responses for {len(connection_ids)} connections × {len(prompt_ids)} prompts")
+            
+            # Get updated document IDs from KnowledgeDocuments
+            kb_cursor.execute("""
+                SELECT id, document_id FROM docs 
+                WHERE document_id LIKE %s
+            """, (f'batch_{batch_id}_doc_%',))
+            kb_docs = kb_cursor.fetchall()
+            kb_doc_map = {doc_id: kb_id for kb_id, doc_id in kb_docs}
+            
+            created_responses = 0
+            for doc in documents:
+                doc_id_pattern = f"batch_{batch_id}_doc_{doc.id}"
+                kb_doc_id = kb_doc_map.get(doc_id_pattern)
+                
+                if not kb_doc_id:
+                    logger.warning(f"⚠️ No KB document found for {doc_id_pattern}")
+                    continue
+                
+                for conn_id in connection_ids:
+                    # Get connection details
+                    connection = session.query(Connection).filter_by(id=conn_id).first()
+                    if not connection:
+                        continue
+                        
+                    # Get connection config safely
+                    connection_config = connection.connection_config or {}
+                    
+                    conn_details = {
+                        'id': connection.id,
+                        'name': connection.name,
+                        'provider_id': connection.provider_id,
+                        'model_id': connection.model_id,
+                        'api_key': connection.api_key,
+                        'base_url': connection.base_url,
+                        'temperature': connection_config.get('temperature'),
+                        'max_tokens': connection_config.get('max_tokens')
+                    }
+                    
+                    for prompt_id in prompt_ids:
+                        kb_cursor.execute("""
+                            INSERT INTO llm_responses 
+                            (document_id, prompt_id, connection_id, connection_details, 
+                             status, created_at, batch_id)
+                            VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                        """, (
+                            kb_doc_id,
+                            prompt_id,
+                            conn_id,
+                            json.dumps(conn_details),
+                            'QUEUED',
+                            batch_id
+                        ))
+                        created_responses += 1
+            
+            kb_conn.commit()
+            logger.info(f"✅ Created {created_responses} new LLM response shells")
+            
+            # Step 5: Update batch status to trigger analysis
+            batch.status = 'STAGED'  # Ready for external processing
             session.commit()
-
-            logger.info(f"✅ RESTAGE: Batch #{batch.batch_number} restaging completed successfully")
-
-            # Step 6: Start LLM processing for all new responses
-            batch.status = 'ANALYZING'
-            session.commit()
-
-            # Processing is now handled by the KnowledgeDocuments database
-            # Calculate expected total responses
-            total_responses = staging_results['total_documents'] * len(connection_ids) * len(prompt_ids)
-
-            session.commit()
-
-            logger.info(f"✅ RESTAGE COMPLETE: Batch #{batch.batch_number} restage and rerun started")
-            logger.info(f"   🔄 Documents refreshed: {staging_results['total_documents']}")
-            logger.info(f"   🗑️ Old responses deleted: {deleted_responses_count}")
-            logger.info(f"   ➕ New responses to be created: {total_responses}")
-            logger.info(f"   🚀 Batch is now ready for processing")
-
-            return {
+            
+            # Build response while session is still active
+            response_data = {
                 'success': True,
                 'batch_id': batch_id,
                 'batch_number': batch.batch_number,
                 'batch_name': batch.batch_name,
-                'status': batch.status,
-                'restage_results': {
-                    'total_documents': staging_results['total_documents'],
-                    'deleted_responses': deleted_responses_count,
-                    'expected_new_responses': total_responses,
-                    'staging_details': staging_results
-                }
+                'deleted_responses': deleted_responses,
+                'refreshed_documents': refreshed_docs,
+                'refreshed_kb_docs': refreshed_kb_docs,
+                'created_responses': created_responses,
+                'status': 'STAGED',
+                'message': f'Batch {batch_id} prepared for rerun analysis with {created_responses} responses'
             }
-
-        except Exception as e:
-            session.rollback()
-            logger.error(f"❌ Error in restage and rerun for batch {batch_id}: {e}", exc_info=True)
-            return {'success': False, 'error': str(e)}
-        finally:
+            
+            # Close connections
             session.close()
-
-    def rerun_batch(self, batch_id: int) -> Dict[str, Any]:
-        """DEPRECATED: Batch rerun moved to KnowledgeDocuments database"""
-        return self._handle_llm_response_deprecation('rerun_batch')
+            kb_cursor.close()
+            kb_conn.close()
+            
+            logger.info(f"✅ RERUN: Completed rerun analysis setup for batch {batch_id}")
+            
+            return response_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error in rerun_batch for batch {batch_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'batch_id': batch_id
+            }
 
     def _deprecated_rerun_batch(self, batch_id: int) -> Dict[str, Any]:
         """
@@ -1675,8 +1778,35 @@ class BatchService:
 
             # Store original status for logging
             original_status = batch.status
+            
+            # Step 1: Delete ALL LLM responses associated with this batch from KnowledgeDocuments
+            import psycopg2
+            deleted_responses = 0
+            
+            try:
+                kb_conn = psycopg2.connect(
+                    host="studio.local",
+                    database="KnowledgeDocuments",
+                    user="postgres", 
+                    password="prodogs03",
+                    port=5432
+                )
+                kb_cursor = kb_conn.cursor()
+                
+                # Delete ALL LLM responses for this batch
+                kb_cursor.execute("DELETE FROM llm_responses WHERE batch_id = %s", (batch_id,))
+                deleted_responses = kb_cursor.rowcount
+                kb_conn.commit()
+                kb_cursor.close()
+                kb_conn.close()
+                
+                logger.info(f"🗑️ RESET: Deleted {deleted_responses} LLM responses from KnowledgeDocuments")
+                
+            except Exception as e:
+                logger.error(f"Error deleting LLM responses during reset: {e}")
+                # Continue with reset even if LLM response deletion fails
 
-            # Reset batch to prestage state
+            # Step 2: Reset batch to prestage state
             batch.status = 'SAVED'
             batch.started_at = None  # Clear start time
             batch.completed_at = None  # Clear completion time
@@ -1688,7 +1818,7 @@ class BatchService:
 
             session.commit()
 
-            # Unassign documents from this batch so they can be reassigned during next staging
+            # Step 3: Unassign documents from this batch so they can be reassigned during next staging
             documents = session.query(Document).filter(Document.batch_id == batch_id).all()
             documents_unassigned = 0
 
@@ -1700,6 +1830,7 @@ class BatchService:
 
             logger.info(f"✅ RESET: Batch {batch_id} reset successfully")
             logger.info(f"   Status: {original_status} → SAVED")
+            logger.info(f"   LLM responses deleted: {deleted_responses}")
             logger.info(f"   Documents unassigned: {documents_unassigned}")
             logger.info(f"   Batch can now be staged and run again")
 
@@ -1711,6 +1842,7 @@ class BatchService:
                 'batch_name': batch.batch_name,
                 'original_status': original_status,
                 'new_status': 'SAVED',
+                'deleted_responses': deleted_responses,
                 'documents_unassigned': documents_unassigned,
                 'next_steps': 'Batch is now ready for staging. Use "Stage Batch" to prepare it for analysis.'
             }

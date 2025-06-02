@@ -263,9 +263,10 @@ const BatchManagement = ({ onNavigateBack }) => {
         setError(null);
         setProgressMessage(`✅ Staging completed successfully! Batch "${batchName}" is now ready for analysis.`);
 
-        // Refresh batch details and list immediately
+        // Refresh batch details, LLM responses, and list immediately
         if (selectedBatch && selectedBatch.id === batchId) {
           await loadBatchDetails(batchId);
+          await loadLlmResponses(batchId); // Refresh LLM responses after staging
         }
         await loadBatches();
 
@@ -331,63 +332,44 @@ const BatchManagement = ({ onNavigateBack }) => {
   };
 
   const handleRerunAnalysis = async (batchId, batchName) => {
-    if (!window.confirm(`Are you sure you want to rerun analysis for batch "${batchName}"? This will reset all LLM responses.`)) {
+    if (!window.confirm(`Are you sure you want to rerun analysis for batch "${batchName}"?\n\nThis will:\n• Delete all existing LLM responses\n• Refresh documents (check for file changes)\n• Recreate LLM response shells\n• Prepare batch for analysis\n\nThis is useful when files have changed or you want a complete refresh.`)) {
       return;
     }
 
     try {
       setActionLoading('rerun-analysis');
+      setProgressMessage(`🔄 Starting rerun analysis for batch "${batchName}"...`);
+      
       const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/rerun`);
 
       if (response.data.success) {
         setError(null);
-        // Refresh batch details
+        setProgressMessage(`✅ Rerun analysis completed! Batch "${batchName}" is ready for processing.`);
+        
+        // Refresh batch details and LLM responses
         if (selectedBatch && selectedBatch.id === batchId) {
           await loadBatchDetails(batchId);
+          await loadLlmResponses(batchId); // Refresh LLM responses after rerun
         }
         await loadBatches();
+        
+        // Clear progress message after 3 seconds
+        setTimeout(() => {
+          setProgressMessage('');
+        }, 3000);
       } else {
         setError(response.data.error || 'Failed to rerun analysis');
+        setProgressMessage('');
       }
     } catch (error) {
       console.error('Error rerunning analysis:', error);
       setError('Failed to rerun analysis');
+      setProgressMessage('');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleRestageAndRerun = async (batchId, batchName) => {
-    if (!window.confirm(`Are you sure you want to restage and rerun analysis for batch "${batchName}"?\n\nThis will:\n• Delete all existing LLM responses\n• Refresh all documents (check for file changes)\n• Recreate LLM responses for all connections and prompts\n• Start analysis from the beginning\n\nThis is useful when files have changed or you want a complete refresh.`)) {
-      return;
-    }
-
-    try {
-      setActionLoading('restage-and-rerun');
-      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/restage-and-rerun`);
-
-      if (response.data.success) {
-        setError(null);
-        setProgressMessage(`🔄 Restaging and rerunning batch "${batchName}"...`);
-
-        // Start progress polling for the restaged batch
-        startProgressPolling(batchId);
-
-        // Refresh batch details
-        if (selectedBatch && selectedBatch.id === batchId) {
-          await loadBatchDetails(batchId);
-        }
-        await loadBatches();
-      } else {
-        setError(response.data.error || 'Failed to restage and rerun analysis');
-      }
-    } catch (error) {
-      console.error('Error restaging and rerunning analysis:', error);
-      setError('Failed to restage and rerun analysis');
-    } finally {
-      setActionLoading(null);
-    }
-  };
 
   const handleResetToPrestage = async (batchId, batchName) => {
     if (!window.confirm(`Are you sure you want to reset batch "${batchName}" to prestage state?\n\nThis will:\n• Reset the batch status to SAVED (prestage)\n• Unassign all documents from the batch\n• Clear processing progress\n• Allow you to restart the batch from the beginning\n\nThe batch configuration will be preserved, but you'll need to stage and run it again.`)) {
@@ -402,9 +384,10 @@ const BatchManagement = ({ onNavigateBack }) => {
         setError(null);
         setProgressMessage(`🔄💾 Batch "${batchName}" reset to prestage state. ${response.data.next_steps}`);
 
-        // Refresh batch details
+        // Refresh batch details and clear LLM responses
         if (selectedBatch && selectedBatch.id === batchId) {
           await loadBatchDetails(batchId);
+          await loadLlmResponses(batchId); // Refresh LLM responses after reset
         }
         await loadBatches();
 
@@ -772,7 +755,6 @@ const BatchManagement = ({ onNavigateBack }) => {
               onReprocessStaging={handleReprocessStaging}
               onRunAnalysis={handleRunAnalysis}
               onRerunAnalysis={handleRerunAnalysis}
-              onRestageAndRerun={handleRestageAndRerun}
               onResetToPrestage={handleResetToPrestage}
               onLoadMoreResponses={handleLoadMoreResponses}
               onResponseDoubleClick={handleResponseDoubleClick}
@@ -815,7 +797,6 @@ const BatchDetails = ({
   onReprocessStaging,
   onRunAnalysis,
   onRerunAnalysis,
-  onRestageAndRerun,
   onResetToPrestage,
   onLoadMoreResponses,
   onResponseDoubleClick,
@@ -857,12 +838,11 @@ const BatchDetails = ({
             {/* Staging Lifecycle Actions */}
             {(batch.status === 'SAVED' || batch.status === 'FAILED_STAGING') && (
               <button
-                onClick={() => alert('Staging is currently unavailable. LLM processing has been moved to KnowledgeDocuments system. Use external processing tools.')}
-                disabled={true}
+                onClick={() => onReprocessStaging(batch.id, batch.batch_name)}
+                disabled={actionLoading === 'reprocess-staging'}
                 className="btn btn-primary btn-sm"
-                title="This functionality has been moved to KnowledgeDocuments system"
               >
-                ⚙️ {batch.status === 'SAVED' ? 'Stage' : 'Restage'} (Unavailable)
+                {actionLoading === 'reprocess-staging' ? '⏳' : '⚙️'} {batch.status === 'SAVED' ? 'Stage' : 'Restage'}
               </button>
             )}
 
@@ -877,24 +857,14 @@ const BatchDetails = ({
             )}
 
             {batch.status === 'COMPLETED' && (
-              <>
-                <button
-                  onClick={() => alert('Rerun Analysis is currently unavailable. LLM processing has been moved to KnowledgeDocuments system.')}
-                  disabled={true}
-                  className="btn btn-secondary btn-sm"
-                  title="This functionality has been moved to KnowledgeDocuments system"
-                >
-                  🔄 Rerun Analysis (Unavailable)
-                </button>
-                <button
-                  onClick={() => alert('Restage & Rerun is currently unavailable. LLM processing has been moved to KnowledgeDocuments system.')}
-                  disabled={true}
-                  className="btn btn-warning btn-sm"
-                  title="This functionality has been moved to KnowledgeDocuments system"
-                >
-                  🔄📄 Restage & Rerun (Unavailable)
-                </button>
-              </>
+              <button
+                onClick={() => onRerunAnalysis(batch.id, batch.batch_name)}
+                disabled={actionLoading === 'rerun-analysis'}
+                className="btn btn-secondary btn-sm"
+                title="Delete all responses, refresh documents, and recreate LLM response shells"
+              >
+                {actionLoading === 'rerun-analysis' ? '⏳' : '🔄'} Rerun Analysis
+              </button>
             )}
 
             {/* Legacy Actions for backward compatibility */}

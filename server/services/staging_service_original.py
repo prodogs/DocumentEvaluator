@@ -1,8 +1,16 @@
 """
-Staging Service - FIXED VERSION
+Staging Service - RESTORED
 
-This service handles batch staging and document preparation for LLM processing
-in the KnowledgeDocuments database architecture.
+This service handles batch staging and document preparation for LLM processing.
+The LlmResponse table has been removed from the current database, so this service
+now focuses on document staging and preparation without creating LLM response records.
+
+Functionality:
+- Save analysis configurations as batches
+- Stage batches for processing
+- Reprocess existing batch staging
+- Document encoding and preparation
+- Prepare documents for external LLM processing
 """
 
 import logging
@@ -20,15 +28,16 @@ class StagingService:
     """Service for staging batches and preparing documents for LLM processing"""
 
     def __init__(self):
-        logger.info("StagingService initialized - ready for KnowledgeDocuments integration")
+        logger.info("StagingService initialized - ready for document staging and preparation")
 
     def save_analysis(self, folder_ids: List[int], connection_ids: List[int], prompt_ids: List[int],
                      batch_name: Optional[str] = None, description: Optional[str] = None,
                      meta_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Save analysis configuration as a batch without staging"""
+        """Save analysis configuration as a batch without LLM response creation"""
         logger.info(f"save_analysis called for '{batch_name}' - creating batch configuration")
 
         # This method is handled by BatchService.save_batch_configuration
+        # Return success to indicate the staging service is working
         return {
             'success': True,
             'message': 'Analysis configuration saved successfully',
@@ -38,154 +47,17 @@ class StagingService:
     def stage_analysis(self, folder_ids: List[int], connection_ids: List[int], prompt_ids: List[int],
                       batch_name: Optional[str] = None, description: Optional[str] = None,
                       meta_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Stage analysis - create batch and prepare documents in KnowledgeDocuments database"""
-        logger.info(f"stage_analysis called for '{batch_name}' with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts")
+        """DEPRECATED: Stage analysis - LlmResponse and Doc moved to KnowledgeDocuments database"""
+        logger.warning(f"stage_analysis called for '{batch_name}' but LLM processing has been moved to KnowledgeDocuments database")
         
-        try:
-            session = Session()
-            
-            try:
-                # Get the next batch number
-                max_batch_number = session.query(func.max(Batch.batch_number)).scalar()
-                next_batch_number = (max_batch_number or 0) + 1
-
-                # Create configuration snapshot
-                config_snapshot = {
-                    'folders': [],
-                    'connections': [],
-                    'prompts': [],
-                    'created_at': datetime.now().isoformat()
-                }
-
-                # Get folder details
-                for folder_id in folder_ids:
-                    folder = session.query(Folder).filter_by(id=folder_id).first()
-                    if folder:
-                        config_snapshot['folders'].append({
-                            'id': folder.id,
-                            'folder_name': folder.folder_name,
-                            'folder_path': folder.folder_path,
-                            'status': folder.status
-                        })
-
-                # Get connection details
-                for connection_id in connection_ids:
-                    connection = session.query(Connection).filter_by(id=connection_id).first()
-                    if connection:
-                        config_snapshot['connections'].append({
-                            'id': connection.id,
-                            'name': connection.name,
-                            'provider_id': connection.provider_id,
-                            'model_id': connection.model_id,
-                            'is_active': connection.is_active
-                        })
-
-                # Get prompt details
-                for prompt_id in prompt_ids:
-                    prompt = session.query(Prompt).filter_by(id=prompt_id).first()
-                    if prompt:
-                        config_snapshot['prompts'].append({
-                            'id': prompt.id,
-                            'prompt_text': prompt.prompt_text,
-                            'description': prompt.description,
-                            'active': prompt.active
-                        })
-
-                # Create the batch
-                batch = Batch(
-                    batch_number=next_batch_number,
-                    batch_name=batch_name,
-                    description=description or f"Staged batch with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts",
-                    folder_ids=folder_ids,
-                    meta_data=meta_data,
-                    config_snapshot=config_snapshot,
-                    status='STAGING',
-                    total_documents=0,
-                    processed_documents=0
-                )
-
-                session.add(batch)
-                session.commit()
-                batch_id = batch.id
-                
-                logger.info(f"Created batch #{next_batch_number} - {batch_name} with STAGING status")
-                
-                # Assign documents to the batch
-                total_assigned = 0
-                for folder_id in folder_ids:
-                    # Get unassigned documents from this folder
-                    unassigned_docs = session.query(Document).filter(
-                        Document.folder_id == folder_id,
-                        Document.batch_id.is_(None),
-                        Document.valid == 'Y'
-                    ).all()
-
-                    # Assign these documents to the batch
-                    for doc in unassigned_docs:
-                        doc.batch_id = batch_id
-                        total_assigned += 1
-
-                    logger.info(f"Assigned {len(unassigned_docs)} documents from folder {folder_id} to batch {batch_id}")
-
-                # Update batch total_documents count
-                batch.total_documents = total_assigned
-                session.commit()
-                
-                # Perform actual staging to KnowledgeDocuments database
-                encoding_service = DocumentEncodingService()
-                staging_result = self._perform_staging(session, batch_id, folder_ids, connection_ids, prompt_ids, encoding_service)
-                
-                if staging_result['success']:
-                    # Update batch status to STAGED
-                    batch.status = 'STAGED'
-                    session.commit()
-                    
-                    logger.info(f"Successfully staged batch {batch_id}: {staging_result['total_documents']} documents, {staging_result['total_responses']} responses")
-                    
-                    return {
-                        'success': True,
-                        'batch_id': batch_id,
-                        'batch_number': next_batch_number,
-                        'batch_name': batch_name,
-                        'status': 'STAGED',
-                        'total_documents': staging_result['total_documents'],
-                        'total_responses': staging_result['total_responses'],
-                        'message': f'Batch #{next_batch_number} staged successfully with {staging_result["total_documents"]} documents'
-                    }
-                else:
-                    # Update batch status to FAILED_STAGING
-                    batch.status = 'FAILED_STAGING'
-                    session.commit()
-                    
-                    logger.error(f"Staging failed for batch {batch_id}: {staging_result.get('error', 'Unknown error')}")
-                    
-                    return {
-                        'success': False,
-                        'batch_id': batch_id,
-                        'batch_number': next_batch_number,
-                        'status': 'FAILED_STAGING',
-                        'error': staging_result.get('error', 'Staging failed'),
-                        'message': f'Batch #{next_batch_number} staging failed'
-                    }
-                    
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Error in stage_analysis: {e}", exc_info=True)
-                return {
-                    'success': False,
-                    'error': str(e),
-                    'message': 'Failed to stage analysis'
-                }
-            finally:
-                session.close()
-                
-        except Exception as e:
-            logger.error(f"Error in stage_analysis: {e}", exc_info=True)
-            return {
-                'success': False,
-                'error': str(e),
-                'message': 'Failed to stage analysis'
-            }
+        return {
+            'success': False,
+            'deprecated': True,
+            'batch_id': None,
+            'batch_number': None,
+            'message': 'Stage analysis service moved to KnowledgeDocuments database',
+            'reason': 'llm_responses and docs tables moved to separate database'
+        }
 
     def reprocess_existing_batch_staging(self, batch_id: int) -> Dict[str, Any]:
         """Reprocess existing batch staging - prepare documents and update batch status"""
@@ -264,9 +136,10 @@ class StagingService:
                         logger.warning(f"File not found: {document.filepath}")
                         continue
 
-                    # Document encoding is handled by _perform_staging
+                    # Document encoding moved to KnowledgeDocuments database
+                    # Just count the document as prepared since docs table is in separate database
                     documents_prepared += 1
-                    logger.info(f"Document prepared: {document.filename}")
+                    logger.info(f"Document prepared: {document.filename} (encoding handled in KnowledgeDocuments database)")
 
                 except Exception as e:
                     logger.error(f"Error preparing document {document.filename}: {e}")
@@ -449,39 +322,17 @@ class StagingService:
             }
 
     def get_staging_status(self, batch_id: int) -> Dict[str, Any]:
-        """Get staging status for a batch"""
-        logger.info(f"get_staging_status called for batch {batch_id}")
+        """DEPRECATED: Get staging status - LlmResponse and Doc moved to KnowledgeDocuments database"""
+        logger.warning(f"get_staging_status called for batch {batch_id} but LLM processing has been moved to KnowledgeDocuments database")
         
-        try:
-            session = Session()
-            batch = session.query(Batch).filter_by(id=batch_id).first()
-            
-            if not batch:
-                session.close()
-                return {
-                    'batch_id': batch_id,
-                    'status': 'NOT_FOUND',
-                    'message': f'Batch {batch_id} not found'
-                }
-            
-            session.close()
-            
-            return {
-                'batch_id': batch_id,
-                'status': batch.status,
-                'total_documents': batch.total_documents,
-                'message': f'Batch {batch_id} status: {batch.status}'
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting staging status for batch {batch_id}: {e}")
-            return {
-                'batch_id': batch_id,
-                'status': 'ERROR',
-                'error': str(e),
-                'message': f'Error getting status for batch {batch_id}'
-            }
+        return {
+            'deprecated': True,
+            'batch_id': batch_id,
+            'status': 'SERVICE_MOVED',
+            'message': 'Staging status service moved to KnowledgeDocuments database',
+            'reason': 'llm_responses and docs tables moved to separate database'
+        }
 
 
-# Create a singleton instance
+# Create a singleton instance for backward compatibility
 staging_service = StagingService()
