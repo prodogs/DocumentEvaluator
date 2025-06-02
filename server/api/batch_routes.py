@@ -596,15 +596,204 @@ def register_batch_routes(app):
 
     @app.route('/api/batches/<int:batch_id>/llm-responses', methods=['GET'])
     def get_batch_llm_responses(batch_id):
-        """DEPRECATED: Get LLM responses for batch - LlmResponse moved to KnowledgeDocuments database"""
-        return jsonify({
-            'deprecated': True,
-            'error': 'Batch LLM responses service moved to KnowledgeDocuments database',
-            'reason': 'llm_responses table moved to separate database',
-            'responses': [],
-            'total_count': 0,
-            'batch_id': batch_id
-        }), 410  # 410 Gone - resource no longer available
+        """Get LLM responses for batch from KnowledgeDocuments database using batch_id"""
+        try:
+            import psycopg2
+            import json
+            from database import Session
+            from models import Document
+            
+            # Get limit and offset for pagination
+            limit = int(request.args.get('limit', 50))
+            offset = int(request.args.get('offset', 0))
+            
+            # Connect to KnowledgeDocuments database
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Query LLM responses directly by batch_id (much simpler!)
+            kb_cursor.execute("""
+                SELECT 
+                    lr.id, lr.document_id, lr.prompt_id, lr.connection_id, lr.connection_details,
+                    lr.task_id, lr.status, lr.started_processing_at, lr.completed_processing_at,
+                    lr.response_json, lr.response_text, lr.response_time_ms, lr.error_message,
+                    lr.overall_score, lr.input_tokens, lr.output_tokens, lr.time_taken_seconds,
+                    lr.tokens_per_second, lr.timestamp, lr.created_at, lr.batch_id,
+                    d.document_id as kb_document_id
+                FROM llm_responses lr
+                JOIN docs d ON lr.document_id = d.id
+                WHERE lr.batch_id = %s
+                ORDER BY lr.created_at DESC
+                LIMIT %s OFFSET %s
+            """, (batch_id, limit, offset))
+                
+            llm_responses = kb_cursor.fetchall()
+            
+            # Get total count for pagination
+            kb_cursor.execute("SELECT COUNT(*) FROM llm_responses WHERE batch_id = %s", (batch_id,))
+            total_count = kb_cursor.fetchone()[0]
+            
+            kb_cursor.close()
+            kb_conn.close()
+            
+            # Get prompt, connection, and document data from doc_eval database
+            session = Session()
+            try:
+                from models import Prompt, Connection, Document
+                
+                # Get all unique prompt, connection, and document IDs from responses
+                prompt_ids = set()
+                connection_ids = set()
+                doc_eval_document_ids = set()
+                
+                for response in llm_responses:
+                    if response[2]:  # prompt_id
+                        prompt_ids.add(response[2])
+                    if response[3]:  # connection_id
+                        connection_ids.add(response[3])
+                    
+                    # Extract doc_eval document_id from kb_document_id pattern
+                    kb_document_id = response[19]  # kb_document_id
+                    if kb_document_id:
+                        import re
+                        # Ensure kb_document_id is a string
+                        kb_doc_id_str = str(kb_document_id) if kb_document_id else ""
+                        match = re.match(r'batch_\d+_doc_(\d+)', kb_doc_id_str)
+                        if match:
+                            doc_eval_document_ids.add(int(match.group(1)))
+                
+                from models import Model
+                
+                # Fetch prompts, connections, and documents
+                prompts = {p.id: p for p in session.query(Prompt).filter(Prompt.id.in_(prompt_ids)).all()} if prompt_ids else {}
+                connections = {c.id: c for c in session.query(Connection).filter(Connection.id.in_(connection_ids)).all()} if connection_ids else {}
+                documents = {d.id: d for d in session.query(Document).filter(Document.id.in_(doc_eval_document_ids)).all()} if doc_eval_document_ids else {}
+                
+                # Fetch models for connections that have model_id
+                model_ids = {c.model_id for c in connections.values() if c.model_id}
+                models = {m.id: m for m in session.query(Model).filter(Model.id.in_(model_ids)).all()} if model_ids else {}
+                
+                # Format responses for API
+                formatted_responses = []
+                for response in llm_responses:
+                    (id, document_id, prompt_id, connection_id, connection_details,
+                     task_id, status, started_processing_at, completed_processing_at,
+                     response_json, response_text, response_time_ms, error_message,
+                     overall_score, input_tokens, output_tokens, time_taken_seconds,
+                     tokens_per_second, timestamp, created_at, batch_id_field,
+                     kb_document_id) = response
+                    
+                    # Parse connection details
+                    connection_details_parsed = None
+                    if connection_details:
+                        try:
+                            if isinstance(connection_details, str):
+                                connection_details_parsed = json.loads(connection_details)
+                            else:
+                                connection_details_parsed = connection_details
+                        except:
+                            connection_details_parsed = connection_details
+                    
+                    # Extract document_id from kb_document_id pattern (batch_{batch_id}_doc_{doc_id})
+                    doc_eval_document_id = None
+                    if kb_document_id:
+                        import re
+                        # Ensure kb_document_id is a string
+                        kb_doc_id_str = str(kb_document_id) if kb_document_id else ""
+                        match = re.match(r'batch_\d+_doc_(\d+)', kb_doc_id_str)
+                        if match:
+                            doc_eval_document_id = int(match.group(1))
+                    
+                    # Get prompt, connection, and document objects
+                    prompt_obj = prompts.get(prompt_id) if prompt_id else None
+                    connection_obj = connections.get(connection_id) if connection_id else None
+                    
+                    # Fetch document directly from database
+                    document_obj = None
+                    if doc_eval_document_id:
+                        document_obj = session.query(Document).filter_by(id=doc_eval_document_id).first()
+                    
+                    # Get model name for connection
+                    model_name = None
+                    if connection_obj and connection_obj.model_id:
+                        model_obj = models.get(connection_obj.model_id)
+                        model_name = model_obj.display_name if model_obj else connection_details_parsed.get('model_name') if connection_details_parsed else None
+                    elif connection_details_parsed:
+                        model_name = connection_details_parsed.get('model_name')
+                    
+                    formatted_response = {
+                        'id': id,
+                        'kb_document_id': document_id,
+                        'doc_eval_document_id': doc_eval_document_id,
+                        'filename': document_obj.filename if document_obj else 'Unknown document',
+                        'filepath': document_obj.filepath if document_obj else 'Unknown path',
+                        'document': {
+                            'filename': document_obj.filename if document_obj else 'Unknown document',
+                            'filepath': document_obj.filepath if document_obj else 'Unknown path'
+                        },
+                        'prompt_id': prompt_id,
+                        'prompt': {
+                            'id': prompt_obj.id if prompt_obj else prompt_id,
+                            'description': prompt_obj.description if prompt_obj else 'Unknown prompt',
+                            'prompt_text': prompt_obj.prompt_text if prompt_obj else None
+                        } if prompt_obj or prompt_id else None,
+                        'connection_id': connection_id,
+                        'connection_details': connection_details_parsed,
+                        'connection': {
+                            'id': connection_obj.id if connection_obj else connection_id,
+                            'name': connection_obj.name if connection_obj else connection_details_parsed.get('name', 'Unknown connection'),
+                            'model_name': model_name,
+                            'provider_type': connection_details_parsed.get('provider_type') if connection_details_parsed else 'Unknown'
+                        } if connection_obj or connection_details_parsed else None,
+                        'task_id': task_id,
+                        'status': status,
+                        'started_processing_at': started_processing_at.isoformat() if started_processing_at and hasattr(started_processing_at, 'isoformat') else str(started_processing_at) if started_processing_at else None,
+                        'completed_processing_at': completed_processing_at.isoformat() if completed_processing_at and hasattr(completed_processing_at, 'isoformat') else str(completed_processing_at) if completed_processing_at else None,
+                        'response_json': response_json,
+                        'response_text': response_text,
+                        'response_time_ms': response_time_ms,
+                        'error_message': error_message,
+                        'overall_score': overall_score,
+                        'input_tokens': input_tokens,
+                        'output_tokens': output_tokens,
+                        'time_taken_seconds': time_taken_seconds,
+                        'tokens_per_second': tokens_per_second,
+                        'timestamp': timestamp.isoformat() if timestamp and hasattr(timestamp, 'isoformat') else str(timestamp) if timestamp else None,
+                        'created_at': created_at.isoformat() if created_at and hasattr(created_at, 'isoformat') else str(created_at) if created_at else None,
+                        'batch_id': batch_id_field
+                    }
+                    formatted_responses.append(formatted_response)
+                
+                # Calculate pagination info
+                has_more = (offset + limit) < total_count
+                
+                return jsonify({
+                    'success': True,
+                    'responses': formatted_responses,
+                    'pagination': {
+                        'total': total_count,
+                        'limit': limit,
+                        'offset': offset,
+                        'has_more': has_more
+                    },
+                    'batch_id': batch_id
+                })
+            finally:
+                session.close()
+                
+        except Exception as e:
+            logger.error(f"Error getting batch LLM responses for batch {batch_id}: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'batch_id': batch_id
+            }), 500
 
     @app.route('/api/batches/<int:batch_id>/config-snapshot', methods=['GET'])
     def get_batch_config_snapshot(batch_id):

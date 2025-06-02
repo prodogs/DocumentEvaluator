@@ -582,21 +582,32 @@ class BatchService:
                                             
                                             kb_cursor.execute("""
                                                 INSERT INTO llm_responses 
-                                                (document_id, prompt_id, connection_id, connection_details, task_id, status, started_processing_at)
-                                                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                                                (document_id, prompt_id, connection_id, connection_details, task_id, status, started_processing_at, batch_id)
+                                                VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s)
                                             """, (
                                                 doc_id,  # Using KnowledgeDocuments doc_id
                                                 prompt.get('id'),
                                                 connection.get('id'),
                                                 json.dumps(llm_config),
                                                 task_id,
-                                                'QUEUED'  # Initial status
+                                                'QUEUED',  # Initial status
+                                                batch.id  # Add batch_id
                                             ))
                                             kb_conn.commit()
                                             kb_cursor.close()
                                             kb_conn.close()
                                             
                                             logger.info(f"📝 Created llm_responses record for task {task_id}")
+                                            
+                                            # Start background polling for this task
+                                            self._start_task_polling(
+                                                task_id=task_id,
+                                                doc_id=doc_id,
+                                                connection_id=connection.get('id'),
+                                                prompt_id=prompt.get('id'),
+                                                connection_details=llm_config
+                                            )
+                                            
                                         except Exception as e:
                                             logger.error(f"❌ Failed to create llm_responses record: {e}")
                             else:
@@ -1945,6 +1956,625 @@ class BatchService:
             return None
         finally:
             session.close()
+
+    def _check_and_update_batch_completion_status(self) -> None:
+        """
+        Check if any batches have all their tasks completed and update batch status accordingly
+        This method queries the KnowledgeDocuments database to check task completion
+        """
+        try:
+            import psycopg2
+            import json
+            
+            # Connect to both databases
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            doc_eval_session = Session()
+            
+            # Get all batches that are currently ANALYZING
+            analyzing_batches = doc_eval_session.query(Batch).filter(
+                Batch.status == 'ANALYZING'
+            ).all()
+            
+            for batch in analyzing_batches:
+                # Get all documents in this batch
+                batch_documents = doc_eval_session.query(Document).filter(
+                    Document.batch_id == batch.id
+                ).all()
+                
+                if not batch_documents:
+                    continue
+                
+                # Create mapping from doc_eval document IDs to KnowledgeDocuments doc IDs
+                kb_doc_ids = []
+                logger.info(f"🔍 Looking for documents for batch {batch.id} ({len(batch_documents)} documents)")
+                
+                for doc in batch_documents:
+                    # The doc_id in KnowledgeDocuments follows pattern: batch_{batch_id}_doc_{doc_id}
+                    kb_doc_id_pattern = f"batch_{batch.id}_doc_{doc.id}"
+                    logger.info(f"   Searching for document pattern: {kb_doc_id_pattern}")
+                    
+                    # Find the actual doc_id in KnowledgeDocuments database
+                    kb_cursor.execute(
+                        "SELECT id FROM docs WHERE document_id = %s",
+                        (kb_doc_id_pattern,)
+                    )
+                    result = kb_cursor.fetchone()
+                    if result:
+                        kb_doc_ids.append(result[0])
+                        logger.info(f"   ✅ Found KB doc_id: {result[0]} for pattern: {kb_doc_id_pattern}")
+                    else:
+                        logger.warning(f"   ❌ No KB document found for pattern: {kb_doc_id_pattern}")
+                
+                logger.info(f"🔍 Found {len(kb_doc_ids)} KnowledgeDocuments doc IDs: {kb_doc_ids}")
+                
+                if not kb_doc_ids:
+                    logger.warning(f"No KnowledgeDocuments found for batch {batch.id}")
+                    continue
+                
+                # Check llm_responses for all documents in this batch
+                logger.info(f"🔍 Querying llm_responses for KB doc IDs: {kb_doc_ids}")
+                
+                kb_cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total_responses,
+                        COUNT(CASE WHEN status = 'S' THEN 1 END) as completed_responses,
+                        COUNT(CASE WHEN status = 'F' THEN 1 END) as failed_responses,
+                        COUNT(CASE WHEN status = 'QUEUED' THEN 1 END) as queued_responses
+                    FROM llm_responses 
+                    WHERE document_id = ANY(%s)
+                """, (kb_doc_ids,))
+                
+                # Also check what llm_responses actually exist for debugging
+                kb_cursor.execute("""
+                    SELECT document_id, status, task_id
+                    FROM llm_responses 
+                    WHERE document_id = ANY(%s)
+                """, (kb_doc_ids,))
+                actual_responses = kb_cursor.fetchall()
+                logger.info(f"🔍 Actual llm_responses found: {actual_responses}")
+                
+                # Back to the count query
+                kb_cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total_responses,
+                        COUNT(CASE WHEN status = 'S' THEN 1 END) as completed_responses,
+                        COUNT(CASE WHEN status = 'F' THEN 1 END) as failed_responses,
+                        COUNT(CASE WHEN status = 'QUEUED' THEN 1 END) as queued_responses
+                    FROM llm_responses 
+                    WHERE document_id = ANY(%s)
+                """, (kb_doc_ids,))
+                
+                result = kb_cursor.fetchone()
+                if not result:
+                    continue
+                
+                total_responses, completed_responses, failed_responses, queued_responses = result
+                finished_responses = completed_responses + failed_responses
+                
+                logger.info(f"📊 Batch {batch.id} progress: {finished_responses}/{total_responses} responses finished ({completed_responses} success, {failed_responses} failed, {queued_responses} queued)")
+                
+                # Check if all tasks are complete (no more QUEUED tasks)
+                if queued_responses == 0 and total_responses > 0:
+                    # All tasks are finished, update batch status
+                    batch.status = 'COMPLETED'
+                    batch.completed_at = func.now()
+                    batch.processed_documents = len(batch_documents)
+                    
+                    doc_eval_session.commit()
+                    
+                    logger.info(f"🎉 Batch {batch.id} (#{batch.batch_number} - '{batch.batch_name}') marked as COMPLETED!")
+                    logger.info(f"   📊 Final results: {completed_responses} successful, {failed_responses} failed out of {total_responses} total responses")
+            
+            kb_cursor.close()
+            kb_conn.close()
+            doc_eval_session.close()
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking batch completion status: {e}", exc_info=True)
+
+    def _start_task_polling(self, task_id: str, doc_id: int, connection_id: int, prompt_id: int, connection_details: dict) -> None:
+        """
+        Start background polling for a specific task to check completion status
+        
+        Args:
+            task_id: The task ID returned by RAG API
+            doc_id: Document ID in KnowledgeDocuments database
+            connection_id: Connection ID used for the task
+            prompt_id: Prompt ID used for the task
+            connection_details: Complete connection configuration
+        """
+        import threading
+        import time
+        import requests
+        import json
+        import psycopg2
+        
+        def poll_task():
+            """Background polling function that runs in a separate thread"""
+            
+            max_attempts = 180  # 30 minutes with 10-second intervals
+            attempt = 0
+            
+            logger.info(f"🔄 Starting background polling for task {task_id}")
+            
+            while attempt < max_attempts:
+                try:
+                    time.sleep(10)  # Poll every 10 seconds
+                    attempt += 1
+                    
+                    # Check task status via RAG API
+                    response = requests.get(
+                        f"http://localhost:7001/analyze_status/{task_id}",
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        status_data = response.json()
+                        task_status = status_data.get('status', 'unknown')
+                        
+                        logger.info(f"📊 Task {task_id} status: {task_status} (attempt {attempt}/{max_attempts})")
+                        
+                        # Debug: Log the full response structure to understand the data format
+                        logger.info(f"🔍 Full response data for task {task_id}: {json.dumps(status_data, indent=2)}")
+                        
+                        if task_status in ['completed', 'success', 'failed']:
+                            # Task is finished, update llm_responses
+                            try:
+                                kb_conn = psycopg2.connect(
+                                    host="studio.local",
+                                    database="KnowledgeDocuments", 
+                                    user="postgres",
+                                    password="prodogs03",
+                                    port=5432
+                                )
+                                kb_cursor = kb_conn.cursor()
+                                
+                                # Initialize variables that might be used in both success and failure cases
+                                response_time_ms = None
+                                tokens_per_second = None
+                                
+                                if task_status in ['completed', 'success']:
+                                    # Extract data from the response - try multiple possible structures
+                                    analysis_data = status_data.get('data', {})
+                                    result_data = status_data.get('result', {})
+                                    task_result = status_data.get('task_result', {})
+                                    
+                                    # Handle results - could be dict or list
+                                    results_raw = status_data.get('results', {})
+                                    if isinstance(results_raw, list) and results_raw:
+                                        results_data = results_raw[0] if isinstance(results_raw[0], dict) else {}
+                                    elif isinstance(results_raw, dict):
+                                        results_data = results_raw
+                                    else:
+                                        results_data = {}
+                                    
+                                    # Handle scoring_result - could be dict or list
+                                    scoring_raw = status_data.get('scoring_result', {})
+                                    if isinstance(scoring_raw, list) and scoring_raw:
+                                        scoring_data = scoring_raw[0] if isinstance(scoring_raw[0], dict) else {}
+                                    elif isinstance(scoring_raw, dict):
+                                        scoring_data = scoring_raw
+                                    else:
+                                        scoring_data = {}
+                                    
+                                    # Debug: Show what data structures we found
+                                    logger.info(f"🔍 Data structures found for task {task_id}:")
+                                    logger.info(f"   status_data keys: {list(status_data.keys())}")
+                                    logger.info(f"   analysis_data keys: {list(analysis_data.keys()) if isinstance(analysis_data, dict) and analysis_data else 'None'}")
+                                    logger.info(f"   result_data keys: {list(result_data.keys()) if isinstance(result_data, dict) and result_data else 'None'}")
+                                    logger.info(f"   task_result keys: {list(task_result.keys()) if isinstance(task_result, dict) and task_result else 'None'}")
+                                    logger.info(f"   results_data keys: {list(results_data.keys()) if isinstance(results_data, dict) and results_data else 'None'}")
+                                    logger.info(f"   scoring_data keys: {list(scoring_data.keys()) if isinstance(scoring_data, dict) and scoring_data else 'None'}")
+                                    logger.info(f"   results_raw type: {type(results_raw)} - {results_raw if not isinstance(results_raw, (dict, list)) or len(str(results_raw)) < 200 else f'{type(results_raw)} with {len(results_raw)} items'}")
+                                    logger.info(f"   scoring_raw type: {type(scoring_raw)} - {scoring_raw if not isinstance(scoring_raw, (dict, list)) or len(str(scoring_raw)) < 200 else f'{type(scoring_raw)} with {len(scoring_raw)} items'}")
+                                    
+                                    # Try to get response_text from multiple possible locations
+                                    response_text = (
+                                        results_data.get('response_text') or
+                                        results_data.get('response') or
+                                        results_data.get('content') or
+                                        results_data.get('text') or
+                                        results_data.get('output') or
+                                        results_data.get('analysis') or
+                                        status_data.get('message') or
+                                        analysis_data.get('response_text') or 
+                                        result_data.get('response_text') or
+                                        task_result.get('response_text') or
+                                        status_data.get('response_text') or
+                                        analysis_data.get('response') or
+                                        result_data.get('response') or
+                                        task_result.get('response') or
+                                        status_data.get('response') or
+                                        analysis_data.get('content') or
+                                        result_data.get('content') or
+                                        task_result.get('content') or
+                                        status_data.get('content') or
+                                        analysis_data.get('text') or
+                                        result_data.get('text') or
+                                        task_result.get('text') or
+                                        status_data.get('text') or
+                                        analysis_data.get('output') or
+                                        result_data.get('output') or
+                                        task_result.get('output') or
+                                        status_data.get('output') or
+                                        ''
+                                    )
+                                    
+                                    # Store the complete response as JSON
+                                    response_json = json.dumps(status_data) if status_data else None
+                                    
+                                    # Extract metrics from various possible locations
+                                    overall_score = (
+                                        scoring_data.get('overall_score') or
+                                        scoring_data.get('score') or
+                                        scoring_data.get('rating') or
+                                        results_data.get('overall_score') or
+                                        results_data.get('score') or
+                                        results_data.get('rating') or
+                                        analysis_data.get('overall_score') or
+                                        result_data.get('overall_score') or
+                                        task_result.get('overall_score') or
+                                        status_data.get('overall_score') or
+                                        analysis_data.get('score') or
+                                        result_data.get('score') or
+                                        task_result.get('score') or
+                                        status_data.get('score') or
+                                        analysis_data.get('rating') or
+                                        result_data.get('rating') or
+                                        task_result.get('rating') or
+                                        status_data.get('rating')
+                                    )
+                                    
+                                    input_tokens = (
+                                        results_data.get('input_tokens') or
+                                        results_data.get('tokens_in') or
+                                        results_data.get('prompt_tokens') or
+                                        analysis_data.get('input_tokens') or
+                                        result_data.get('input_tokens') or
+                                        task_result.get('input_tokens') or
+                                        status_data.get('input_tokens') or
+                                        analysis_data.get('tokens_in') or
+                                        result_data.get('tokens_in') or
+                                        task_result.get('tokens_in') or
+                                        status_data.get('tokens_in') or
+                                        analysis_data.get('prompt_tokens') or
+                                        result_data.get('prompt_tokens') or
+                                        task_result.get('prompt_tokens') or
+                                        status_data.get('prompt_tokens')
+                                    )
+                                    
+                                    output_tokens = (
+                                        results_data.get('output_tokens') or
+                                        results_data.get('tokens_out') or
+                                        results_data.get('completion_tokens') or
+                                        analysis_data.get('output_tokens') or
+                                        result_data.get('output_tokens') or
+                                        task_result.get('output_tokens') or
+                                        status_data.get('output_tokens') or
+                                        analysis_data.get('tokens_out') or
+                                        result_data.get('tokens_out') or
+                                        task_result.get('tokens_out') or
+                                        status_data.get('tokens_out') or
+                                        analysis_data.get('completion_tokens') or
+                                        result_data.get('completion_tokens') or
+                                        task_result.get('completion_tokens') or
+                                        status_data.get('completion_tokens')
+                                    )
+                                    
+                                    time_taken = (
+                                        results_data.get('time_taken_seconds') or
+                                        results_data.get('processing_time') or
+                                        results_data.get('duration') or
+                                        results_data.get('elapsed_time') or
+                                        results_data.get('execution_time') or
+                                        analysis_data.get('time_taken_seconds') or
+                                        result_data.get('time_taken_seconds') or
+                                        task_result.get('time_taken_seconds') or
+                                        status_data.get('time_taken_seconds') or
+                                        analysis_data.get('processing_time') or
+                                        result_data.get('processing_time') or
+                                        task_result.get('processing_time') or
+                                        status_data.get('processing_time') or
+                                        analysis_data.get('duration') or
+                                        result_data.get('duration') or
+                                        task_result.get('duration') or
+                                        status_data.get('duration') or
+                                        analysis_data.get('elapsed_time') or
+                                        result_data.get('elapsed_time') or
+                                        task_result.get('elapsed_time') or
+                                        status_data.get('elapsed_time') or
+                                        analysis_data.get('execution_time') or
+                                        result_data.get('execution_time') or
+                                        task_result.get('execution_time') or
+                                        status_data.get('execution_time')
+                                    )
+                                    
+                                    # Add detailed debugging to see where values come from
+                                    logger.info(f"📝 Raw extraction attempts for task {task_id}:")
+                                    if response_text:
+                                        for location in ['analysis_data', 'result_data', 'task_result', 'status_data']:
+                                            data = locals()[location] if location in locals() else {}
+                                            for field in ['response_text', 'response', 'content', 'text', 'output']:
+                                                if data.get(field):
+                                                    logger.info(f"   Found response_text in {location}.{field}")
+                                                    break
+                                    
+                                    if overall_score:
+                                        for location in ['analysis_data', 'result_data', 'task_result', 'status_data']:
+                                            data = locals()[location] if location in locals() else {}
+                                            for field in ['overall_score', 'score', 'rating']:
+                                                if data.get(field):
+                                                    logger.info(f"   Found overall_score in {location}.{field}: {data.get(field)}")
+                                                    break
+                                    
+                                    logger.info(f"📝 Final extracted data for task {task_id}:")
+                                    logger.info(f"   Response text length: {len(response_text) if response_text else 0}")
+                                    logger.info(f"   Response text preview: {response_text[:100] if response_text else 'None'}...")
+                                    logger.info(f"   Overall score: {overall_score}")
+                                    logger.info(f"   Input tokens: {input_tokens}")
+                                    logger.info(f"   Output tokens: {output_tokens}")
+                                    logger.info(f"   Time taken: {time_taken} seconds")
+                                    logger.info(f"   Response time: {response_time_ms} ms")
+                                    logger.info(f"   Tokens per second: {tokens_per_second}")
+                                    logger.info(f"   Response JSON length: {len(response_json) if response_json else 0}")
+                                    
+                                    # Convert time to float if it's a string
+                                    if time_taken and isinstance(time_taken, str):
+                                        try:
+                                            time_taken = float(time_taken)
+                                        except ValueError:
+                                            logger.warning(f"Could not convert time_taken '{time_taken}' to float")
+                                            time_taken = None
+                                    
+                                    # Convert score to float if it's a string
+                                    if overall_score and isinstance(overall_score, str):
+                                        try:
+                                            overall_score = float(overall_score)
+                                        except ValueError:
+                                            logger.warning(f"Could not convert overall_score '{overall_score}' to float")
+                                            overall_score = None
+                                    
+                                    # Convert tokens to integers if they're strings
+                                    if input_tokens and isinstance(input_tokens, str):
+                                        try:
+                                            input_tokens = int(input_tokens)
+                                        except ValueError:
+                                            logger.warning(f"Could not convert input_tokens '{input_tokens}' to int")
+                                            input_tokens = None
+                                    
+                                    if output_tokens and isinstance(output_tokens, str):
+                                        try:
+                                            output_tokens = int(output_tokens)
+                                        except ValueError:
+                                            logger.warning(f"Could not convert output_tokens '{output_tokens}' to int")
+                                            output_tokens = None
+                                    
+                                    # Calculate additional metrics
+                                    response_time_ms = int(time_taken * 1000) if time_taken else None
+                                    
+                                    # Calculate tokens per second if we have both tokens and time
+                                    tokens_per_second = None
+                                    if time_taken and time_taken > 0:
+                                        total_tokens = 0
+                                        if input_tokens:
+                                            total_tokens += input_tokens
+                                        if output_tokens:
+                                            total_tokens += output_tokens
+                                        if total_tokens > 0:
+                                            tokens_per_second = round(total_tokens / time_taken, 2)
+                                    
+                                    # Update llm_responses with successful completion - include ALL available fields
+                                    logger.info(f"🔄 Updating llm_responses for task_id: {task_id}")
+                                    
+                                    update_result = kb_cursor.execute("""
+                                        UPDATE llm_responses 
+                                        SET status = %s, 
+                                            completed_processing_at = NOW(),
+                                            response_text = %s,
+                                            response_json = %s,
+                                            overall_score = %s,
+                                            input_tokens = %s,
+                                            output_tokens = %s,
+                                            time_taken_seconds = %s,
+                                            response_time_ms = %s,
+                                            tokens_per_second = %s,
+                                            timestamp = NOW()
+                                        WHERE task_id = %s
+                                    """, (
+                                        'S',  # Success
+                                        response_text,
+                                        response_json,
+                                        overall_score,
+                                        input_tokens,
+                                        output_tokens,
+                                        time_taken,
+                                        response_time_ms,
+                                        tokens_per_second,
+                                        task_id
+                                    ))
+                                    
+                                    # Check how many rows were affected
+                                    rows_affected = kb_cursor.rowcount
+                                    logger.info(f"🔄 UPDATE affected {rows_affected} rows for task_id: {task_id}")
+                                    
+                                    if rows_affected == 0:
+                                        logger.error(f"❌ No rows updated for task_id: {task_id} - checking if record exists")
+                                        # Check if the record exists
+                                        kb_cursor.execute("SELECT id, status FROM llm_responses WHERE task_id = %s", (task_id,))
+                                        existing_record = kb_cursor.fetchone()
+                                        if existing_record:
+                                            logger.error(f"❌ Record exists but wasn't updated: {existing_record}")
+                                        else:
+                                            logger.error(f"❌ No record found with task_id: {task_id}")
+                                    
+                                    # COMMIT the transaction BEFORE checking batch completion
+                                    kb_conn.commit()
+                                    
+                                    logger.info(f"✅ Task {task_id} completed successfully and llm_responses updated")
+                                    
+                                    # Check if all tasks for this batch are now complete
+                                    # Add a small delay to ensure database transaction is committed
+                                    time.sleep(0.1)
+                                    self._check_and_update_batch_completion_status()
+                                    
+                                    kb_cursor.close()
+                                    kb_conn.close()
+                                    
+                                    # Task is finished, exit polling loop
+                                    break
+                                    
+                                else:  # failed
+                                    # Extract error information from various possible locations
+                                    error_message = (
+                                        status_data.get('error') or
+                                        status_data.get('error_message') or
+                                        status_data.get('message') or
+                                        status_data.get('data', {}).get('error') or
+                                        status_data.get('result', {}).get('error') or
+                                        'Task failed'
+                                    )
+                                    
+                                    # Try to extract any partial data even from failed tasks
+                                    analysis_data = status_data.get('data', {})
+                                    result_data = status_data.get('result', {})
+                                    
+                                    # Store the complete response as JSON even for failures (useful for debugging)
+                                    response_json = json.dumps(status_data) if status_data else None
+                                    
+                                    # Try to get timing info even from failed tasks
+                                    time_taken = (
+                                        analysis_data.get('time_taken_seconds') or
+                                        result_data.get('time_taken_seconds') or
+                                        status_data.get('time_taken_seconds') or
+                                        analysis_data.get('processing_time') or
+                                        result_data.get('processing_time') or
+                                        status_data.get('processing_time') or
+                                        analysis_data.get('duration') or
+                                        result_data.get('duration') or
+                                        status_data.get('duration')
+                                    )
+                                    
+                                    # Convert time to float if it's a string
+                                    if time_taken and isinstance(time_taken, str):
+                                        try:
+                                            time_taken = float(time_taken)
+                                        except ValueError:
+                                            time_taken = None
+                                    
+                                    # Calculate response time in milliseconds
+                                    response_time_ms = int(time_taken * 1000) if time_taken else None
+                                    
+                                    logger.info(f"📝 Extracted failure data for task {task_id}:")
+                                    logger.info(f"   Error message: {error_message}")
+                                    logger.info(f"   Time taken: {time_taken} seconds")
+                                    logger.info(f"   Response time: {response_time_ms} ms")
+                                    logger.info(f"   Response JSON length: {len(response_json) if response_json else 0}")
+                                    
+                                    # Update llm_responses with failure - include all available data
+                                    kb_cursor.execute("""
+                                        UPDATE llm_responses 
+                                        SET status = %s,
+                                            completed_processing_at = NOW(),
+                                            error_message = %s,
+                                            response_json = %s,
+                                            time_taken_seconds = %s,
+                                            response_time_ms = %s,
+                                            timestamp = NOW()
+                                        WHERE task_id = %s
+                                    """, (
+                                        'F',  # Failed
+                                        error_message,
+                                        response_json,
+                                        time_taken,
+                                        response_time_ms,
+                                        task_id
+                                    ))
+                                    
+                                    logger.error(f"❌ Task {task_id} failed: {error_message}")
+                                
+                                    # COMMIT the transaction BEFORE checking batch completion
+                                    kb_conn.commit()
+                                    
+                                    # Check if all tasks for this batch are now complete (including failures)
+                                    # Add a small delay to ensure database transaction is committed
+                                    time.sleep(0.1)
+                                    self._check_and_update_batch_completion_status()
+                                
+                                kb_cursor.close()
+                                kb_conn.close()
+                                
+                                # Task is finished, exit polling loop
+                                break
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Error updating llm_responses for task {task_id}: {e}")
+                                
+                        elif task_status == 'processing':
+                            # Task is still processing, continue polling
+                            continue
+                        else:
+                            # Unknown status, continue polling but log warning
+                            logger.warning(f"⚠️ Unknown task status for {task_id}: {task_status}")
+                            continue
+                            
+                    elif response.status_code == 404:
+                        # Task not found - it might have been cleaned up
+                        logger.warning(f"⚠️ Task {task_id} not found (404) - may have been cleaned up")
+                        break
+                    else:
+                        logger.warning(f"⚠️ Unexpected status code {response.status_code} for task {task_id}")
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"⚠️ Network error polling task {task_id}: {e}")
+                    # Continue polling despite network errors
+                    continue
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error polling task {task_id}: {e}")
+                    continue
+            
+            # If we exit the loop without completing, mark as timeout
+            if attempt >= max_attempts:
+                logger.error(f"❌ Task {task_id} polling timed out after {max_attempts} attempts")
+                try:
+                    kb_conn = psycopg2.connect(
+                        host="studio.local",
+                        database="KnowledgeDocuments",
+                        user="postgres", 
+                        password="prodogs03",
+                        port=5432
+                    )
+                    kb_cursor = kb_conn.cursor()
+                    
+                    kb_cursor.execute("""
+                        UPDATE llm_responses 
+                        SET status = %s,
+                            error_message = %s
+                        WHERE task_id = %s AND status = 'QUEUED'
+                    """, (
+                        'F',  # Failed
+                        f'Polling timeout after {max_attempts * 10} seconds',
+                        task_id
+                    ))
+                    
+                    kb_conn.commit()
+                    kb_cursor.close()
+                    kb_conn.close()
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error updating llm_responses for timed out task {task_id}: {e}")
+        
+        # Start polling in background thread
+        polling_thread = threading.Thread(target=poll_task, daemon=True)
+        polling_thread.start()
+        logger.info(f"🚀 Started background polling thread for task {task_id}")
 
 # Global instance
 batch_service = BatchService()

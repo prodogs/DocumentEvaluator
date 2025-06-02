@@ -14,6 +14,13 @@ const BatchManagement = ({ onNavigateBack }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
+  
+  // New state for search and filters
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [responseStatusFilter, setResponseStatusFilter] = useState('all');
+  const [scoreFilter, setScoreFilter] = useState({ min: 0, max: 100 });
+  const [sortBy, setSortBy] = useState('created_desc');
 
   // Progress tracking state
   const [progressPolling, setProgressPolling] = useState(null);
@@ -421,6 +428,63 @@ const BatchManagement = ({ onNavigateBack }) => {
     return new Date(timestamp).toLocaleString();
   };
 
+  // Filter and sort batches
+  const getFilteredBatches = () => {
+    let filtered = batches;
+    
+    // Search filter
+    if (searchTerm) {
+      filtered = filtered.filter(batch => 
+        batch.batch_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        batch.id.toString().includes(searchTerm) ||
+        batch.batch_number?.toString().includes(searchTerm)
+      );
+    }
+    
+    // Status filter
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(batch => batch.status === statusFilter);
+    }
+    
+    // Sort
+    const sorted = [...filtered].sort((a, b) => {
+      switch (sortBy) {
+        case 'created_desc':
+          return new Date(b.created_at) - new Date(a.created_at);
+        case 'created_asc':
+          return new Date(a.created_at) - new Date(b.created_at);
+        case 'name_asc':
+          return (a.batch_name || '').localeCompare(b.batch_name || '');
+        case 'name_desc':
+          return (b.batch_name || '').localeCompare(a.batch_name || '');
+        case 'progress':
+          return getProgressPercentage(b) - getProgressPercentage(a);
+        default:
+          return 0;
+      }
+    });
+    
+    return sorted;
+  };
+
+  // Filter LLM responses
+  const getFilteredResponses = () => {
+    let filtered = llmResponses;
+    
+    // Status filter
+    if (responseStatusFilter !== 'all') {
+      filtered = filtered.filter(response => response.status === responseStatusFilter);
+    }
+    
+    // Score filter
+    filtered = filtered.filter(response => {
+      if (response.overall_score === null || response.overall_score === undefined) return true;
+      return response.overall_score >= scoreFilter.min && response.overall_score <= scoreFilter.max;
+    });
+    
+    return filtered;
+  };
+
   // Progress polling functions
   const startProgressPolling = (batchId) => {
     // Clear any existing polling
@@ -579,7 +643,7 @@ const BatchManagement = ({ onNavigateBack }) => {
               <table className="batch-table">
                 <thead>
                   <tr>
-                    <th>Batch #</th>
+                    <th>Batch ID</th>
                     <th>Name</th>
                     <th>Status</th>
                     <th>Progress</th>
@@ -597,7 +661,7 @@ const BatchManagement = ({ onNavigateBack }) => {
                         className={`batch-row ${selectedBatch?.id === batch.id ? 'selected' : ''}`}
                         onClick={() => handleBatchSelect(batch)}
                       >
-                        <td className="batch-number">#{batch.batch_number}</td>
+                        <td className="batch-number">#{batch.id}</td>
                         <td className="batch-name" title={batch.batch_name}>
                           {batch.batch_name || 'Unnamed Batch'}
                         </td>
@@ -719,7 +783,7 @@ const BatchDetails = ({
         <div className="summary-header">
           <div className="summary-info">
             <div className="batch-title">
-              <span className="batch-number">#{batch.batch_number}</span>
+              <span className="batch-number">#{batch.id}</span>
               <span className="batch-name">{batch.batch_name || 'Unnamed Batch'}</span>
               <div className={`status-badge-compact ${statusInfo.class}`}>
                 {statusInfo.text}
