@@ -726,7 +726,8 @@ def load_snapshot(snapshot_id):
                 verify_session = Session()
                 try:
                     # Simple verification - check if tables exist and have data
-                    from models import Document, LlmResponse, Doc
+                    from models import Document
+                    # LlmResponse and Doc models moved to KnowledgeDocuments database
                     doc_count = verify_session.query(Document).count()
 
                     maintenance_tasks[task_id].update({

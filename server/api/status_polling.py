@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from sqlalchemy.sql import func
-from models import LlmResponse
+# LlmResponse model moved to KnowledgeDocuments database
 from database import Session
 from services.client import rag_client
 
@@ -58,38 +58,10 @@ class StatusPollingService:
                 time.sleep(self.poll_interval)
 
     def _poll_pending_tasks(self):
-        """Poll all pending tasks and update their status"""
-        session = Session()
-        try:
-            # Get all LLM responses that are in 'P' (Processing) status and have a task_id
-            pending_responses = session.query(LlmResponse).filter(
-                LlmResponse.status == 'P',
-                LlmResponse.task_id.isnot(None),
-                LlmResponse.task_id != ''
-            ).all()
-
-            logger.debug(f"Found {len(pending_responses)} pending tasks to poll")
-
-            for llm_response in pending_responses:
-                try:
-                    # Check if task has been processing too long
-                    if self._is_task_expired(llm_response):
-                        self._mark_task_as_timeout(session, llm_response)
-                        continue
-
-                    # Poll the status from port 7001 service
-                    status_result = self._poll_task_status(llm_response.task_id)
-
-                    if status_result:
-                        self._update_task_status(session, llm_response, status_result)
-
-                except Exception as e:
-                    logger.error(f"Error polling task {llm_response.task_id}: {e}", exc_info=True)
-
-        except Exception as e:
-            logger.error(f"Error in _poll_pending_tasks: {e}", exc_info=True)
-        finally:
-            session.close()
+        """DEPRECATED: Poll pending tasks - LlmResponse moved to KnowledgeDocuments database"""
+        # LlmResponse table no longer exists in this database
+        logger.debug("Status polling disabled - LlmResponse table moved to KnowledgeDocuments database")
+        return
 
     def _poll_task_status(self, task_id):
         """

@@ -534,9 +534,9 @@ function App() {
         setMessage(`Batch paused: ${response.data.message}`);
         // Immediately update current batch status for instant feedback
         if (currentBatch && currentBatch.id === batchId) {
-          setCurrentBatch({ ...currentBatch, status: 'PA' });
+          setCurrentBatch({ ...currentBatch, status: 'PAUSED' });
           // Set pending update to track expected status
-          setPendingBatchUpdate({ batchId, expectedStatus: 'PA' });
+          setPendingBatchUpdate({ batchId, expectedStatus: 'PAUSED' });
 
           // Clear pending update after 10 seconds to prevent it from being stuck
           setTimeout(() => {

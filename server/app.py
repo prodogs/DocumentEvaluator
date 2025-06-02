@@ -1,34 +1,103 @@
 import os
-import json
+import sys
 import time
-import mimetypes
-import datetime
+import threading
 import logging
-from flask import Flask, request, jsonify
+import json
+import shutil
+from flask import Flask, request, jsonify, send_from_directory
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, inspect, text
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from sqlalchemy.sql import func
 from dotenv import load_dotenv
-import requests
-import uuid
-import pathlib
 
 from database import Session
-from models import Folder, Prompt, Document
+from models import Prompt, Document
 from api.document_routes import register_document_routes, background_tasks
 from api.process_folder import process_folder
-from api.status_polling import polling_service
 from api.run_batch import run_batch_bp
 
 load_dotenv()  # Load environment variables from .env file
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('app.log')
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__, static_folder='static')
 CORS(app)  # Enable CORS for all origins
+
+# Set up Swagger UI
+def configure_swagger():
+    # Get OpenAPI spec path from environment variable or use default
+    OPENAPI_SPEC_PATH = os.getenv('OPENAPI_SPEC_PATH', './openapi.json')
+    SWAGGER_URL = '/api/docs'
+    API_URL = '/static/swagger.json'
+
+    # Create static directory if it doesn't exist
+    if not os.path.exists('static'):
+        os.makedirs('static')
+
+    # Determine the source of the OpenAPI spec
+    source_file = None
+    if os.path.exists(OPENAPI_SPEC_PATH):
+        source_file = OPENAPI_SPEC_PATH
+        logger.info(f"Using OpenAPI spec from {OPENAPI_SPEC_PATH}")
+    elif os.path.exists('openapi.json'):
+        source_file = 'openapi.json'
+        logger.info("Using OpenAPI spec from openapi.json in current directory")
+
+    # If we found a source file, copy it to static/swagger.json
+    if source_file:
+        logger.info(f"Copying {source_file} to static/swagger.json")
+        shutil.copy(source_file, 'static/swagger.json')
+    else:
+        # If no source file exists, check if static/swagger.json already exists
+        if not os.path.exists('static/swagger.json'):
+            logger.warning("No OpenAPI spec found, Swagger UI may not work correctly")
+
+    # Verify the file exists and has content
+    if os.path.exists('static/swagger.json'):
+        size = os.path.getsize('static/swagger.json')
+        logger.info(f"static/swagger.json exists with size {size} bytes")
+
+        # If the file is empty or too small, it's probably invalid
+        if size < 100:
+            logger.warning("swagger.json appears to be empty or too small")
+
+    # Create Swagger UI blueprint
+    swagger_ui_blueprint = get_swaggerui_blueprint(
+        SWAGGER_URL,
+        API_URL,
+        config={
+            'app_name': "Document Processor API"
+        }
+    )
+
+    # Register blueprint with Flask app
+    app.register_blueprint(swagger_ui_blueprint, url_prefix=SWAGGER_URL)
+
+# Configure Swagger UI
+configure_swagger()
+
+# Serve the OpenAPI spec
+@app.route('/static/swagger.json')
+def serve_swagger_spec():
+    return send_from_directory('static', 'swagger.json')
+
+# Add a simple health check endpoint
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'ok',
+        'version': '1.0.0'
+    })
 
 # Register document routes
 register_document_routes(app)
@@ -36,33 +105,33 @@ register_document_routes(app)
 # Register batch execution routes
 app.register_blueprint(run_batch_bp)
 
-# Register service routes - this will be done in app_launcher.py to avoid duplicate registration
-# from api.service_routes import service_routes
-# app.register_blueprint(service_routes)
+# Register all routes and services
+from api.service_routes import register_service_routes
+register_service_routes(app)
 
-# Register folder routes - this will be done in app_launcher.py to avoid duplicate registration
-# from api.folder_routes import folder_routes
-# app.register_blueprint(folder_routes)
+from api.folder_routes import folder_routes
+app.register_blueprint(folder_routes)
 
-# Register folder preprocessing routes - this will be done in app_launcher.py to avoid duplicate registration
-# from api.folder_preprocessing_routes import folder_preprocessing_bp
-# app.register_blueprint(folder_preprocessing_bp)
+from api.folder_preprocessing_routes import folder_preprocessing_bp
+app.register_blueprint(folder_preprocessing_bp)
 
-# Register batch routes - this will be done in app_launcher.py to avoid duplicate registration
-# from api.batch_routes import register_batch_routes
-# register_batch_routes(app)
+from api.batch_routes import register_batch_routes
+register_batch_routes(app)
 
-# Register LLM provider routes - this will be done in app_launcher.py to avoid duplicate registration
-# from api.llm_provider_routes import llm_provider_bp
-# app.register_blueprint(llm_provider_bp)
+from api.llm_provider_routes import llm_provider_bp
+app.register_blueprint(llm_provider_bp)
 
-# Register model routes - this will be done in app_launcher.py to avoid duplicate registration
-# from api.model_routes import model_bp
-# app.register_blueprint(model_bp)
+from api.model_routes import model_bp
+app.register_blueprint(model_bp)
 
-# Register main routes - this will be done in app_launcher.py to avoid duplicate registration
-# from server.routes import register_routes
-# register_routes(app, background_tasks)
+from api.connection_routes import connection_bp
+app.register_blueprint(connection_bp)
+
+from api.maintenance_routes import maintenance_bp
+app.register_blueprint(maintenance_bp)
+
+from routes import register_routes
+register_routes(app, background_tasks)
 
 # Add route to serve the landing page
 @app.route('/')
@@ -362,5 +431,74 @@ def get_task_status(task_id):
         print(f"Error getting task status: {e}")
         return jsonify({'error': str(e)}), 500
 
+# Initialize service integration components
+def initialize_services():
+    """Initialize all background services"""
+    try:
+        from services.health_monitor import health_monitor
+        from api.status_polling import polling_service
+        from services.startup_recovery import startup_recovery_service
+
+        # Start health monitoring
+        health_monitor.start_monitoring()
+        logger.info("Service health monitoring started")
+
+        # Start status polling service
+        polling_service.start_polling()
+        logger.info("Status polling service initialized and started")
+
+        # Run startup recovery to check for outstanding tasks
+        logger.info("Running startup recovery to check for outstanding tasks...")
+        recovery_results = startup_recovery_service.run_startup_recovery()
+        logger.info(f"Startup recovery completed: {recovery_results}")
+
+        # Start the dynamic processing queue
+        logger.info("Starting dynamic processing queue...")
+        from services.dynamic_processing_queue import dynamic_queue
+        dynamic_queue.start_queue_processing()
+        logger.info("Dynamic processing queue started")
+
+        # Start batch cleanup service
+        logger.info("Starting batch cleanup service...")
+        from services.batch_cleanup_service import batch_cleanup_service
+        batch_cleanup_service.start_cleanup_service()
+        logger.info("Batch cleanup service started")
+
+    except Exception as e:
+        logger.error(f"Error initializing services: {e}")
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    try:
+        # Initialize all services
+        initialize_services()
+
+        # Get port from environment or use default
+        port = int(os.getenv('PORT', 5001))
+
+        # Debug: Print all registered routes
+        print("\nRegistered Routes:")
+        for rule in app.url_map.iter_rules():
+            methods = ', '.join(sorted(rule.methods))
+            print(f"  {methods:20s} {rule.rule:40s} -> {rule.endpoint}")
+
+        logger.info(f"Starting Document Processor API on port {port}")
+        logger.info(f"Swagger UI available at http://localhost:{port}/api/docs")
+
+        # Run Flask app with debug mode enabled for troubleshooting
+        print("\nAvailable routes for HTTP requests:")
+        for rule in app.url_map.iter_rules():
+            methods = ', '.join(sorted(rule.methods - {'HEAD', 'OPTIONS'}))
+            print(f"  {methods:20s} {rule.rule}")
+
+        # Check if process-db-folders route is registered
+        process_db_folders_route = [rule for rule in app.url_map.iter_rules() if rule.rule == '/process-db-folders']
+        if process_db_folders_route:
+            print("\n✅ /process-db-folders endpoint is correctly registered")
+        else:
+            print("\n❌ Warning: /process-db-folders endpoint is NOT registered properly!")
+
+        app.run(host='0.0.0.0', port=port, debug=True)
+
+    except Exception as e:
+        logger.error(f"Error starting application: {e}")
+        sys.exit(1)

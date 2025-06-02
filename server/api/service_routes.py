@@ -4,7 +4,8 @@ import logging
 from services.config import service_config, config_manager
 from services.health_monitor import health_monitor
 from services.client import service_client
-from models import LlmResponse, Prompt, Folder, Connection
+from models import Prompt, Folder, Connection
+# LlmResponse model moved to KnowledgeDocuments database
 from database import Session
 
 logger = logging.getLogger(__name__)
@@ -413,128 +414,19 @@ def get_health_summary():
 
 @service_routes.route('/api/services/response-times', methods=['GET'])
 def get_response_time_analytics():
-    """Get response time analytics for analyze_document_with_llm requests"""
-    try:
-        session = Session()
-
-        # Get query parameters
-        limit = request.args.get('limit', 50, type=int)
-        status_filter = request.args.get('status', None)  # Optional status filter (P, S, F)
-
-        # Build query
-        query = session.query(LlmResponse).filter(
-            LlmResponse.response_time_ms.isnot(None),
-            LlmResponse.response_time_ms > 0
-        )
-
-        if status_filter:
-            query = query.filter(LlmResponse.status == status_filter.upper())
-
-        # Get recent records ordered by timestamp
-        recent_responses = query.order_by(LlmResponse.timestamp.desc()).limit(limit).all()
-
-        if not recent_responses:
-            return jsonify({
-                'message': 'No response time data available',
-                'analytics': {
-                    'total_requests': 0,
-                    'avg_response_time_ms': 0,
-                    'min_response_time_ms': 0,
-                    'max_response_time_ms': 0,
-                    'median_response_time_ms': 0
-                },
-                'recent_requests': []
-            }), 200
-
-        # Calculate analytics
-        response_times = [r.response_time_ms for r in recent_responses]
-        total_requests = len(response_times)
-        avg_response_time = sum(response_times) / total_requests
-        min_response_time = min(response_times)
-        max_response_time = max(response_times)
-
-        # Calculate median
-        sorted_times = sorted(response_times)
-        n = len(sorted_times)
-        if n % 2 == 0:
-            median_response_time = (sorted_times[n//2 - 1] + sorted_times[n//2]) / 2
-        else:
-            median_response_time = sorted_times[n//2]
-
-        # Format recent requests with connection and prompt details
-        recent_requests = []
-        for response in recent_responses:
-            # Get connection details if available
-            connection_details = None
-            if response.connection_id and response.connection:
-                connection_details = {
-                    'id': response.connection.id,
-                    'name': response.connection.name,
-                    'base_url': response.connection.base_url,
-                    'provider_type': response.connection.provider.provider_type if response.connection.provider else None,
-                    'is_active': response.connection.is_active
-                }
-
-            # Get prompt details if available
-            prompt_details = None
-            if response.prompt:
-                prompt_details = {
-                    'id': response.prompt.id,
-                    'prompt_text': response.prompt.prompt_text[:100] + '...' if len(response.prompt.prompt_text) > 100 else response.prompt.prompt_text,
-                    'description': response.prompt.description,
-                    'active': bool(response.prompt.active)
-                }
-
-            recent_requests.append({
-                'id': response.id,
-                'task_id': response.task_id,
-                'document_id': response.document_id,
-                'connection': connection_details,
-                'prompt': prompt_details,
-                'status': response.status,
-                'response_time_ms': response.response_time_ms,
-                'timestamp': response.timestamp.isoformat() if response.timestamp else None,
-                'error_message': response.error_message[:100] + '...' if response.error_message and len(response.error_message) > 100 else response.error_message
-            })
-
-        # Status breakdown
-        status_breakdown = {}
-        for response in recent_responses:
-            status = response.status
-            if status not in status_breakdown:
-                status_breakdown[status] = {'count': 0, 'avg_response_time_ms': 0, 'response_times': []}
-            status_breakdown[status]['count'] += 1
-            status_breakdown[status]['response_times'].append(response.response_time_ms)
-
-        # Calculate averages for each status
-        for status, data in status_breakdown.items():
-            if data['response_times']:
-                data['avg_response_time_ms'] = round(sum(data['response_times']) / len(data['response_times']), 2)
-            del data['response_times']  # Remove raw data from response
-
-        session.close()
-
-        return jsonify({
-            'analytics': {
-                'total_requests': total_requests,
-                'avg_response_time_ms': round(avg_response_time, 2),
-                'min_response_time_ms': min_response_time,
-                'max_response_time_ms': max_response_time,
-                'median_response_time_ms': round(median_response_time, 2),
-                'status_breakdown': status_breakdown
-            },
-            'recent_requests': recent_requests,
-            'query_params': {
-                'limit': limit,
-                'status_filter': status_filter
-            }
-        }), 200
-
-    except Exception as e:
-        if 'session' in locals():
-            session.close()
-        logger.error(f"Error getting response time analytics: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+    """DEPRECATED: Response time analytics - LlmResponse moved to KnowledgeDocuments database"""
+    return jsonify({
+        'deprecated': True,
+        'error': 'Response time analytics service moved to KnowledgeDocuments database',
+        'reason': 'llm_responses table moved to separate database',
+        'analytics': {
+            'total_responses': 0,
+            'avg_response_time': 0,
+            'min_response_time': 0,
+            'max_response_time': 0,
+            'status_distribution': {}
+        }
+    }), 410  # 410 Gone - resource no longer available
 
 @service_routes.route('/api/prompts', methods=['GET'])
 def list_prompts():
@@ -728,15 +620,9 @@ def delete_prompt(prompt_id):
             session.close()
             return jsonify({'error': f'Prompt not found: {prompt_id}'}), 404
 
-        # Check if prompt is being used in any LLM responses
-        from models import LlmResponse
-        responses_count = session.query(LlmResponse).filter(LlmResponse.prompt_id == prompt_id).count()
-
-        if responses_count > 0:
-            session.close()
-            return jsonify({
-                'error': f'Cannot delete prompt: it is referenced by {responses_count} LLM responses'
-            }), 400
+        # LLM response checking moved to KnowledgeDocuments database
+        # Skip LLM response dependency check since data moved to separate database
+        responses_count = 0  # LLM response data moved to KnowledgeDocuments database
 
         prompt_text = prompt.prompt_text[:50] + "..." if len(prompt.prompt_text) > 50 else prompt.prompt_text
         session.delete(prompt)
@@ -1006,15 +892,9 @@ def delete_llm_configuration(config_id):
             session.close()
             return jsonify({'error': f'Connection not found: {config_id}'}), 404
 
-        # Check if connection is being used in any LLM responses
-        from models import LlmResponse
-        responses_count = session.query(LlmResponse).filter(LlmResponse.connection_id == config_id).count()
-
-        if responses_count > 0:
-            session.close()
-            return jsonify({
-                'error': f'Cannot delete connection: it is referenced by {responses_count} LLM responses'
-            }), 400
+        # LLM response checking moved to KnowledgeDocuments database
+        # Skip LLM response dependency check since data moved to separate database
+        responses_count = 0  # LLM response data moved to KnowledgeDocuments database
 
         connection_name = connection.name
         session.delete(connection)
@@ -1034,156 +914,8 @@ def delete_llm_configuration(config_id):
         logger.error(f"Error deleting LLM configuration {config_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
-@service_routes.route('/api/connections/<int:connection_id>/test', methods=['POST'])
-def test_connection_configuration(connection_id):
-    """Test a connection by making a test call to the RAG API"""
-    import time
-    try:
-        session = Session()
-        # Get connection with provider information
-        from sqlalchemy import text
-        result = session.execute(text("""
-            SELECT c.*, p.provider_type, m.common_name as model_name
-            FROM connections c
-            LEFT JOIN llm_providers p ON c.provider_id = p.id
-            LEFT JOIN models m ON c.model_id = m.id
-            WHERE c.id = :connection_id
-        """), {"connection_id": connection_id})
-
-        connection_row = result.fetchone()
-        if not connection_row:
-            session.close()
-            return jsonify({'error': f'Connection not found: {connection_id}'}), 404
-
-        config_dict = {
-            'id': connection_row.id,
-            'name': connection_row.name,
-            'base_url': connection_row.base_url,
-            'model_name': connection_row.model_name or 'default',
-            'provider_type': connection_row.provider_type,
-            'api_key': connection_row.api_key,
-            'port_no': connection_row.port_no
-        }
-
-        session.close()
-
-        # Import the RAG service client
-        from services.client import RAGServiceClient, RequestMethod
-
-        # Create RAG service client instance
-        rag_client = RAGServiceClient()
-
-        # Test prompt
-        test_prompt = "Hello! This is a test message. Please respond with 'Test successful' if you can read this."
-
-        # Create a simple test document content
-        test_content = "This is a test document for validating LLM configuration."
-
-        # Prepare data for RAG service
-        prompts_data = [{'prompt': test_prompt}]
-        llm_provider_data = {
-            'provider_type': config_dict['provider_type'],
-            'url': config_dict['base_url'],  # RAG API expects 'url' field instead of 'base_url'
-            'model_name': config_dict['model_name'],
-            'api_key': config_dict['api_key'],
-            'port_no': config_dict['port_no']
-        }
-
-        # Create a temporary doc record for testing
-        from models import Doc
-        import base64
-
-        test_session = Session()
-        try:
-            # Create temporary doc record
-            encoded_content = base64.b64encode(test_content.encode('utf-8'))
-            test_doc = Doc(
-                content=encoded_content,
-                content_type='text/plain',
-                doc_type='txt',
-                file_size=len(test_content.encode('utf-8')),
-                encoding='base64'
-            )
-            test_session.add(test_doc)
-            test_session.commit()
-            test_doc_id = test_doc.id
-        except Exception as e:
-            test_session.rollback()
-            test_session.close()
-            return jsonify({
-                'success': False,
-                'message': 'Failed to create test document',
-                'error': str(e)
-            }), 500
-
-        # Make test call
-        start_time = time.time()
-        try:
-            response = rag_client.client.call_service(
-                service_name="rag_api",
-                endpoint="/analyze_document_with_llm",
-                method=RequestMethod.POST,
-                data={
-                    'doc_id': test_doc_id,
-                    'prompts': prompts_data,  # Send as object, not JSON string
-                    'llm_provider': llm_provider_data  # Send as object, not JSON string
-                },
-                timeout=30
-            )
-
-            end_time = time.time()
-            response_time = round((end_time - start_time) * 1000, 2)
-
-            if response.success:
-                result = jsonify({
-                    'success': True,
-                    'message': 'Connection test successful',
-                    'response': response.data,
-                    'response_time_ms': response_time,
-                    'connection_name': config_dict['name'],
-                    'model_name': config_dict['model_name'],
-                    'provider_type': config_dict['provider_type']
-                })
-            else:
-                result = jsonify({
-                    'success': False,
-                    'message': 'Connection test failed',
-                    'error': response.error_message,
-                    'response_time_ms': response_time,
-                    'connection_name': config_dict['name'],
-                    'model_name': config_dict['model_name'],
-                    'provider_type': config_dict['provider_type']
-                }), 400
-
-        except Exception as llm_error:
-            end_time = time.time()
-            response_time = round((end_time - start_time) * 1000, 2)
-
-            result = jsonify({
-                'success': False,
-                'message': 'Connection test failed',
-                'error': str(llm_error),
-                'response_time_ms': response_time,
-                'connection_name': config_dict['name'],
-                'model_name': config_dict['model_name'],
-                'provider_type': config_dict['provider_type']
-            }), 400
-
-        finally:
-            # Clean up test doc
-            try:
-                test_session.delete(test_doc)
-                test_session.commit()
-            except Exception:
-                test_session.rollback()
-            finally:
-                test_session.close()
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Error testing connection {connection_id}: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+# REMOVED: Duplicate connection test route - handled by connection_routes.py
+# This route was incorrectly testing via RAG API instead of directly testing provider connections
 
 @service_routes.route('/api/llm-configurations/models', methods=['POST'])
 def fetch_available_models():
@@ -1307,87 +1039,14 @@ def fetch_available_models():
 
 @service_routes.route('/api/llm-responses', methods=['GET'])
 def list_llm_responses():
-    """List LLM responses with full prompt and configuration details"""
-    try:
-        session = Session()
-
-        # Get query parameters
-        limit = request.args.get('limit', 20, type=int)
-        status_filter = request.args.get('status', None)
-
-        # Build query with joins to get full details
-        from sqlalchemy.orm import joinedload
-        query = session.query(LlmResponse).options(
-            joinedload(LlmResponse.prompt),
-            joinedload(LlmResponse.connection)
-        )
-
-        if status_filter:
-            query = query.filter(LlmResponse.status == status_filter.upper())
-
-        # Get recent responses
-        responses = query.order_by(LlmResponse.timestamp.desc()).limit(limit).all()
-
-        response_list = []
-        for response in responses:
-            # Get prompt details
-            prompt_info = None
-            if response.prompt:
-                prompt_info = {
-                    'id': response.prompt.id,
-                    'prompt_text': response.prompt.prompt_text,
-                    'description': response.prompt.description,
-                    'active': bool(response.prompt.active)
-                }
-
-            # Get connection details
-            connection_info = None
-            if response.connection_id and response.connection:
-                connection_info = {
-                    'id': response.connection.id,
-                    'name': response.connection.name,
-                    'base_url': response.connection.base_url,
-                    'provider_type': response.connection.provider.provider_type if response.connection.provider else None,
-                    'port_no': response.connection.port_no,
-                    'is_active': response.connection.is_active
-                }
-
-            response_list.append({
-                'id': response.id,
-                'document_id': response.document_id,
-                'task_id': response.task_id,
-                'status': response.status,
-                'prompt': prompt_info,
-                'connection': connection_info,
-                'llm_name': response.llm_name,  # Keep for backward compatibility
-                'response_time_ms': response.response_time_ms,
-                'overall_score': response.overall_score,  # Include suitability score (0-100)
-                'response_json': response.response_json,  # Include full response JSON
-                'response_text': response.response_text,  # Include response text
-                'started_processing_at': response.started_processing_at.isoformat() if response.started_processing_at else None,
-                'completed_processing_at': response.completed_processing_at.isoformat() if response.completed_processing_at else None,
-                'timestamp': response.timestamp.isoformat() if response.timestamp else None,
-                'has_response': bool(response.response_text),
-                'has_error': bool(response.error_message),
-                'error_message': response.error_message[:200] + '...' if response.error_message and len(response.error_message) > 200 else response.error_message
-            })
-
-        session.close()
-
-        return jsonify({
-            'responses': response_list,
-            'total': len(response_list),
-            'query_params': {
-                'limit': limit,
-                'status_filter': status_filter
-            }
-        }), 200
-
-    except Exception as e:
-        if 'session' in locals():
-            session.close()
-        logger.error(f"Error listing LLM responses: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+    """DEPRECATED: LLM responses listing - LlmResponse moved to KnowledgeDocuments database"""
+    return jsonify({
+        'deprecated': True,
+        'error': 'LLM responses listing service moved to KnowledgeDocuments database',
+        'reason': 'llm_responses table moved to separate database',
+        'responses': [],
+        'total_count': 0
+    }), 410  # 410 Gone - resource no longer available
 
 @service_routes.route('/api/folders', methods=['GET'])
 def list_folders():

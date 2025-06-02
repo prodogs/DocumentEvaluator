@@ -82,7 +82,7 @@ class ServiceConfigManager:
             max_retries=3,
             retry_delay=2.0,
             health_check_endpoint="/api/health",
-            enabled=False  # Disabled to prevent health check warnings
+            enabled=True  # Enable RAG API service for LLM processing
         )
         
         # Document Processor Service (current service - port 5001)

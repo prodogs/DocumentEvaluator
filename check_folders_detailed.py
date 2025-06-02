@@ -60,8 +60,8 @@ def check_folders_detailed():
         
         if os.path.exists(missing_folder):
             try:
-                files = [f for f in os.listdir(missing_folder) 
-                        if f.endswith(('.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx'))]
+                files = [f for f in os.listdir(missing_folder)
+                        if f.endswith(('.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx', '.md'))]
                 print(f"✅ Path exists with {len(files)} processable files")
                 if files:
                     print(f"Files found:")

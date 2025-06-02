@@ -8,7 +8,7 @@ import base64
 import mimetypes
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from models import Doc, Document
+from models import Document
 from services.config import config_manager
 
 class DocumentEncodingService:
@@ -68,21 +68,10 @@ class DocumentEncodingService:
                 file_content = file.read()
                 encoded_content = base64.b64encode(file_content)
 
-            # Create doc record with file_path as natural key
-            doc = Doc(
-                file_path=file_path,
-                content=encoded_content,
-                content_type=content_type,
-                doc_type=doc_type,
-                file_size=file_size,
-                encoding='base64'
-            )
-
-            session.add(doc)
-            session.flush()  # Get the ID without committing
-
-            print(f"✅ Encoded document: {file_path} (ID: {doc.id}, Size: {file_size} bytes)")
-            return doc.id
+            # Note: docs table moved to KnowledgeDocuments database
+            # Skip creating doc record since docs table is in separate database
+            print(f"⚠️ Document encoding skipped: {file_path} (docs table moved to KnowledgeDocuments database)")
+            return None
 
         except Exception as e:
             print(f"❌ Failed to encode document {file_path}: {e}")
@@ -99,25 +88,9 @@ class DocumentEncodingService:
         Returns:
             Dictionary with document data or None if not found
         """
-        try:
-            doc = session.query(Doc).filter(Doc.file_path == file_path).first()
-            if not doc:
-                return None
-
-            return {
-                'id': doc.id,
-                'file_path': doc.file_path,
-                'content': doc.content.decode('utf-8') if doc.encoding == 'base64' else doc.content,
-                'content_type': doc.content_type,
-                'doc_type': doc.doc_type,
-                'file_size': doc.file_size,
-                'encoding': doc.encoding,
-                'created_at': doc.created_at.isoformat() if doc.created_at else None
-            }
-
-        except Exception as e:
-            print(f"❌ Failed to retrieve encoded document for path {file_path}: {e}")
-            return None
+        # Note: docs table moved to KnowledgeDocuments database
+        print(f"⚠️ get_encoded_document_by_path called for {file_path} but docs table moved to KnowledgeDocuments database")
+        return None
 
     def prepare_document_for_llm(self, document: Document, session: Session) -> Optional[Dict[str, Any]]:
         """
@@ -130,30 +103,9 @@ class DocumentEncodingService:
         Returns:
             Dictionary ready for LLM service or None if failed
         """
-        try:
-            # Get encoded content using file path
-            doc_data = self.get_encoded_document_by_path(document.filepath, session)
-            if not doc_data:
-                print(f"❌ Could not retrieve encoded content for document {document.id} at path {document.filepath}")
-                return None
-
-            # Prepare data for LLM service
-            llm_data = {
-                'document_id': document.id,
-                'filename': document.filename,
-                'content': doc_data['content'],
-                'content_type': doc_data['content_type'],
-                'doc_type': doc_data['doc_type'],
-                'encoding': doc_data['encoding'],
-                'file_size': doc_data['file_size'],
-                'document_meta_data': document.meta_data
-            }
-
-            return llm_data
-
-        except Exception as e:
-            print(f"❌ Failed to prepare document {document.id} for LLM: {e}")
-            return None
+        # Note: docs table moved to KnowledgeDocuments database
+        print(f"⚠️ prepare_document_for_llm called for document {document.id} but docs table moved to KnowledgeDocuments database")
+        return None
 
     def batch_encode_documents(self, file_paths: list, session: Session) -> Dict[str, Optional[int]]:
         """
@@ -166,16 +118,6 @@ class DocumentEncodingService:
         Returns:
             Dictionary mapping file_path -> doc_id (or None if failed)
         """
-        results = {}
-
-        print(f"🔄 Starting batch encoding of {len(file_paths)} documents...")
-
-        for i, file_path in enumerate(file_paths, 1):
-            print(f"📄 Encoding {i}/{len(file_paths)}: {os.path.basename(file_path)}")
-            doc_id = self.encode_and_store_document(file_path, session)
-            results[file_path] = doc_id
-
-        successful = sum(1 for doc_id in results.values() if doc_id is not None)
-        print(f"✅ Batch encoding complete: {successful}/{len(file_paths)} successful")
-
-        return results
+        # Note: docs table moved to KnowledgeDocuments database
+        print(f"⚠️ batch_encode_documents called for {len(file_paths)} files but docs table moved to KnowledgeDocuments database")
+        return {file_path: None for file_path in file_paths}

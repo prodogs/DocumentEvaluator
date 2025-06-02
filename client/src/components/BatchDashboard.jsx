@@ -88,7 +88,7 @@ const BatchDashboard = () => {
         setDashboardData(prevData => ({
           ...prevData,
           active_batches: prevData.active_batches.map(batch =>
-            batch.batch_id === batchId ? { ...batch, status: 'PA' } : batch
+            batch.batch_id === batchId ? { ...batch, status: 'PAUSED' } : batch
           )
         }));
         // Also refresh from server
@@ -337,11 +337,12 @@ const BatchDashboard = () => {
               <div key={batch.batch_id} className="batch-card active">
                 <div className="batch-header">
                   <h3>#{batch.batch_number} - {batch.batch_name}</h3>
-                  <div className={`batch-status ${batch.status === 'PA' ? 'paused' : 'processing'}`}>
-                    {batch.status === 'PA' ? '⏸️ Paused' : '🔄 Processing'}
+                  <div className={`batch-status ${batch.status === 'PAUSED' ? 'paused' : 'processing'}`}>
+                    {batch.status === 'PAUSED' ? '⏸️ Paused' :
+                     batch.status === 'ANALYZING' ? '🔄 Analyzing' : '🔄 Processing'}
                   </div>
                   <div className="batch-controls">
-                    {batch.status === 'P' && (
+                    {(batch.status === 'P' || batch.status === 'ANALYZING') && (
                       <button
                         onClick={() => handlePauseBatch(batch.batch_id, batch.batch_name)}
                         className="btn btn-sm btn-warning"
@@ -350,7 +351,7 @@ const BatchDashboard = () => {
                         ⏸️ Pause
                       </button>
                     )}
-                    {batch.status === 'PA' && (
+                    {batch.status === 'PAUSED' && (
                       <button
                         onClick={() => handleResumeBatch(batch.batch_id, batch.batch_name)}
                         className="btn btn-sm btn-success"
@@ -465,7 +466,8 @@ const BatchDashboard = () => {
                   <span className="batch-name">{batch.batch_name}</span>
                   <span className={`batch-status ${batch.status.toLowerCase()}`}>
                     {batch.status === 'P' ? '🔄 Processing' :
-                      batch.status === 'PA' ? '⏸️ Paused' :
+                      batch.status === 'ANALYZING' ? '🔄 Analyzing' :
+                      batch.status === 'PAUSED' ? '⏸️ Paused' :
                         batch.status === 'C' ? '✅ Completed' :
                           batch.status === 'F' ? '❌ Failed' : batch.status}
                   </span>

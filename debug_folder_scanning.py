@@ -57,7 +57,7 @@ def debug_folder_scanning():
                 print(f"   📁 Total items in directory: {len(all_files)}")
                 
                 # Filter for document files
-                doc_extensions = ['.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx']
+                doc_extensions = ['.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx', '.md']
                 doc_files = [f for f in all_files if any(f.lower().endswith(ext) for ext in doc_extensions)]
                 print(f"   📄 Document files found: {len(doc_files)}")
                 
@@ -158,7 +158,7 @@ def check_process_folder_logic():
             files = []
             for root, dirs, filenames in os.walk(folder_path):
                 for filename in filenames:
-                    if filename.lower().endswith(('.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx')):
+                    if filename.lower().endswith(('.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx', '.md')):
                         file_path = os.path.join(root, filename)
                         files.append(file_path)
             

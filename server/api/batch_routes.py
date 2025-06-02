@@ -97,18 +97,98 @@ def register_batch_routes(app):
                     'error': 'At least one prompt must be selected'
                 }), 400
 
-            result = staging_service.save_analysis(
-                folder_ids=folder_ids,
-                batch_name=batch_name,
-                connection_ids=connection_ids,  # ✅ FIX: Pass selected connections
-                prompt_ids=prompt_ids,  # ✅ FIX: Pass selected prompts
-                meta_data=meta_data
-            )
+            # Create batch directly since staging service is deprecated
+            from database import Session
+            from models import Batch, Folder, Connection, Prompt
+            from sqlalchemy.sql import func
 
-            if result['success']:
+            session = Session()
+            try:
+                # Get the next batch number
+                max_batch_number = session.query(func.max(Batch.batch_number)).scalar()
+                next_batch_number = (max_batch_number or 0) + 1
+
+                # Create configuration snapshot
+                from datetime import datetime
+                config_snapshot = {
+                    'folders': [],
+                    'connections': [],
+                    'prompts': [],
+                    'created_at': datetime.now().isoformat()
+                }
+
+                # Get folder details
+                for folder_id in folder_ids:
+                    folder = session.query(Folder).filter_by(id=folder_id).first()
+                    if folder:
+                        config_snapshot['folders'].append({
+                            'id': folder.id,
+                            'folder_name': folder.folder_name,
+                            'folder_path': folder.folder_path,
+                            'status': folder.status
+                        })
+
+                # Get connection details
+                for connection_id in connection_ids:
+                    connection = session.query(Connection).filter_by(id=connection_id).first()
+                    if connection:
+                        config_snapshot['connections'].append({
+                            'id': connection.id,
+                            'name': connection.name,
+                            'provider_id': connection.provider_id,
+                            'model_id': connection.model_id,
+                            'is_active': connection.is_active
+                        })
+
+                # Get prompt details
+                for prompt_id in prompt_ids:
+                    prompt = session.query(Prompt).filter_by(id=prompt_id).first()
+                    if prompt:
+                        config_snapshot['prompts'].append({
+                            'id': prompt.id,
+                            'prompt_text': prompt.prompt_text,
+                            'description': prompt.description,
+                            'active': prompt.active
+                        })
+
+                # Create the batch with SAVED status
+                batch = Batch(
+                    batch_number=next_batch_number,
+                    batch_name=batch_name,
+                    description=f"Saved batch with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts",
+                    folder_ids=folder_ids,
+                    meta_data=meta_data,
+                    config_snapshot=config_snapshot,  # Store the configuration snapshot
+                    status='SAVED',  # Saved but not staged
+                    total_documents=0,
+                    processed_documents=0
+                )
+
+                session.add(batch)
+                session.commit()
+
+                logger.info(f"✅ Created batch #{next_batch_number} - {batch_name} with SAVED status")
+
+                result = {
+                    'success': True,
+                    'batch_id': batch.id,
+                    'batch_number': batch.batch_number,
+                    'batch_name': batch.batch_name,
+                    'status': batch.status,
+                    'message': f'Batch #{batch.batch_number} saved successfully'
+                }
+
                 return jsonify(result), 200
-            else:
-                return jsonify(result), 400
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error creating batch: {e}", exc_info=True)
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+            finally:
+                session.close()
 
         except Exception as e:
             logger.error(f"Error saving analysis: {e}", exc_info=True)
@@ -180,48 +260,26 @@ def register_batch_routes(app):
 
     @app.route('/api/batches/<int:batch_id>/reprocess-staging', methods=['POST'])
     def reprocess_staging(batch_id):
-        """Reprocess staging for a batch (for SAVED or FAILED_STAGING batches)"""
+        """Reprocess staging for a batch - prepare documents and update batch status"""
         try:
-            # Get the batch
-            from models import Batch
-            from database import Session
-            session = Session()
+            logger.info(f"Reprocess staging requested for batch {batch_id}")
 
-            try:
-                batch = session.query(Batch).filter(Batch.id == batch_id).first()
-                if not batch:
-                    return jsonify({
-                        'success': False,
-                        'error': f'Batch {batch_id} not found'
-                    }), 404
+            # Use the restored staging service
+            result = staging_service.reprocess_existing_batch_staging(batch_id)
 
-                if batch.status not in ['SAVED', 'FAILED_STAGING']:
-                    return jsonify({
-                        'success': False,
-                        'error': f'Batch {batch_id} is not in a state that allows reprocessing staging (current: {batch.status})'
-                    }), 400
-
-                # Use the staging service to reprocess the EXISTING batch
-                result = staging_service.reprocess_existing_batch_staging(
-                    batch_id=batch_id,
-                    folder_ids=batch.folder_ids or [],
-                    batch_name=batch.batch_name,
-                    meta_data=batch.meta_data
-                )
-
-                if result['success']:
-                    return jsonify(result), 200
-                else:
-                    return jsonify(result), 400
-
-            finally:
-                session.close()
+            if result['success']:
+                logger.info(f"Batch {batch_id} staging completed successfully")
+                return jsonify(result), 200
+            else:
+                logger.warning(f"Batch {batch_id} staging failed: {result.get('error', 'Unknown error')}")
+                return jsonify(result), 400
 
         except Exception as e:
-            logger.error(f"Error reprocessing staging for batch {batch_id}: {e}", exc_info=True)
+            logger.error(f"Error in reprocess staging for batch {batch_id}: {e}", exc_info=True)
             return jsonify({
                 'success': False,
-                'error': str(e)
+                'error': str(e),
+                'batch_id': batch_id
             }), 500
 
     @app.route('/api/batches/<int:batch_id>/rerun', methods=['POST'])
@@ -538,97 +596,15 @@ def register_batch_routes(app):
 
     @app.route('/api/batches/<int:batch_id>/llm-responses', methods=['GET'])
     def get_batch_llm_responses(batch_id):
-        """Get all LLM responses for a specific batch"""
-        try:
-            from database import Session
-            from models import Batch, LlmResponse, Document, Prompt, Connection
-            from sqlalchemy.orm import joinedload
-
-            session = Session()
-            try:
-                # Verify batch exists
-                batch = session.query(Batch).filter_by(id=batch_id).first()
-                if not batch:
-                    return jsonify({
-                        'success': False,
-                        'error': f'Batch {batch_id} not found'
-                    }), 404
-
-                # Get query parameters
-                limit = request.args.get('limit', 100, type=int)
-                offset = request.args.get('offset', 0, type=int)
-                status_filter = request.args.get('status', None)
-
-                # Build query for LLM responses in this batch
-                # Note: Including connection relationship for new connections system
-                query = session.query(LlmResponse).options(
-                    joinedload(LlmResponse.document),
-                    joinedload(LlmResponse.prompt),
-                    joinedload(LlmResponse.connection)
-                ).join(Document).filter(Document.batch_id == batch_id)
-
-                # Apply status filter if provided
-                if status_filter:
-                    query = query.filter(LlmResponse.status == status_filter.upper())
-
-                # Get total count for pagination
-                total_count = query.count()
-
-                # Apply pagination and ordering
-                responses = query.order_by(
-                    LlmResponse.timestamp.desc()
-                ).offset(offset).limit(limit).all()
-
-                # Format response data
-                response_list = []
-                for response in responses:
-                    response_data = {
-                        'id': response.id,
-                        'task_id': response.task_id,
-                        'status': response.status,
-                        'started_processing_at': response.started_processing_at.isoformat() if response.started_processing_at else None,
-                        'completed_processing_at': response.completed_processing_at.isoformat() if response.completed_processing_at else None,
-                        'response_time_ms': response.response_time_ms,
-                        'error_message': response.error_message,
-                        'overall_score': response.overall_score,  # Include suitability score (0-100)
-                        'response_json': response.response_json,  # Include full response JSON for detailed view
-                        'response_text': response.response_text,  # Include response text for detailed view
-                        'timestamp': response.timestamp.isoformat() if response.timestamp else None,
-                        'document': {
-                            'id': response.document.id,
-                            'filename': response.document.filename,
-                            'filepath': response.document.filepath
-                        } if response.document else None,
-                        'prompt': {
-                            'id': response.prompt.id,
-                            'description': response.prompt.description,
-                            'prompt_text': response.prompt.prompt_text[:100] + '...' if response.prompt and len(response.prompt.prompt_text) > 100 else response.prompt.prompt_text if response.prompt else None
-                        } if response.prompt else None,
-                        'connection': _format_connection_for_response(response)
-                    }
-                    response_list.append(response_data)
-
-                return jsonify({
-                    'success': True,
-                    'batch_id': batch_id,
-                    'responses': response_list,
-                    'pagination': {
-                        'total': total_count,
-                        'limit': limit,
-                        'offset': offset,
-                        'has_more': offset + limit < total_count
-                    }
-                }), 200
-
-            finally:
-                session.close()
-
-        except Exception as e:
-            logger.error(f"Error getting batch LLM responses: {e}", exc_info=True)
-            return jsonify({
-                'success': False,
-                'error': str(e)
-            }), 500
+        """DEPRECATED: Get LLM responses for batch - LlmResponse moved to KnowledgeDocuments database"""
+        return jsonify({
+            'deprecated': True,
+            'error': 'Batch LLM responses service moved to KnowledgeDocuments database',
+            'reason': 'llm_responses table moved to separate database',
+            'responses': [],
+            'total_count': 0,
+            'batch_id': batch_id
+        }), 410  # 410 Gone - resource no longer available
 
     @app.route('/api/batches/<int:batch_id>/config-snapshot', methods=['GET'])
     def get_batch_config_snapshot(batch_id):
@@ -707,6 +683,24 @@ def register_batch_routes(app):
                 'error': str(e)
             }), 500
 
+    @app.route('/api/batches/<int:batch_id>/reset-to-prestage', methods=['POST'])
+    def reset_batch_to_prestage(batch_id):
+        """Reset a stuck batch back to prestage (SAVED) state"""
+        try:
+            result = batch_service.reset_batch_to_prestage(batch_id)
+
+            if result['success']:
+                return jsonify(result), 200
+            else:
+                return jsonify(result), 400
+
+        except Exception as e:
+            logger.error(f"Error resetting batch {batch_id} to prestage: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
     @app.route('/api/batches/<int:batch_id>', methods=['DELETE'])
     def delete_batch(batch_id):
         """Archive and delete a batch with all associated data"""
@@ -715,9 +709,9 @@ def register_batch_routes(app):
             archived_by = data.get('archived_by', 'User')
             archive_reason = data.get('archive_reason', 'Manual deletion via UI')
 
-            # Temporary fix: Direct deletion without archival due to schema mismatch
+            # Direct deletion without archival - LLM responses moved to KnowledgeDocuments database
             from database import Session
-            from models import Batch, Document, LlmResponse
+            from models import Batch, Document
 
             session = Session()
             try:
@@ -730,10 +724,10 @@ def register_batch_routes(app):
                     }), 404
 
                 # Delete in correct order to respect foreign key constraints:
-                # 1. LLM responses (reference documents)
-                # 2. Docs (reference documents)
-                # 3. Documents (reference batch)
-                # 4. Batch
+                # 1. Docs (reference documents)
+                # 2. Documents (reference batch)
+                # 3. Batch
+                # Note: LLM responses moved to KnowledgeDocuments database
 
                 # Get document IDs for this batch first
                 document_ids = session.query(Document.id).filter(
@@ -741,20 +735,11 @@ def register_batch_routes(app):
                 ).all()
                 document_ids = [d[0] for d in document_ids]
 
-                # Delete LLM responses first (reference documents)
-                llm_responses_deleted = 0
-                if document_ids:
-                    llm_responses_deleted = session.query(LlmResponse).filter(
-                        LlmResponse.document_id.in_(document_ids)
-                    ).delete(synchronize_session=False)
+                # LLM responses deletion skipped - moved to KnowledgeDocuments database
+                llm_responses_deleted = 0  # LLM responses moved to KnowledgeDocuments database
 
-                # Delete docs (reference documents via document_id)
-                docs_deleted = 0
-                if document_ids:
-                    from models import Doc
-                    docs_deleted = session.query(Doc).filter(
-                        Doc.document_id.in_(document_ids)
-                    ).delete(synchronize_session=False)
+                # Note: docs table moved to KnowledgeDocuments database - no cleanup needed
+                docs_deleted = 0  # docs table moved to KnowledgeDocuments database
 
                 # Delete documents (reference batch)
                 documents_deleted = session.query(Document).filter(
@@ -765,14 +750,15 @@ def register_batch_routes(app):
                 session.delete(batch)
                 session.commit()
 
-                logger.info(f"Successfully deleted batch {batch_id}: {documents_deleted} documents, {docs_deleted} docs, {llm_responses_deleted} LLM responses")
+                logger.info(f"Successfully deleted batch {batch_id}: {documents_deleted} documents, {docs_deleted} docs (LLM responses in KnowledgeDocuments database)")
 
                 return jsonify({
                     'success': True,
                     'message': f'Batch {batch_id} deleted successfully',
                     'deleted_documents': documents_deleted,
                     'deleted_docs': docs_deleted,
-                    'deleted_llm_responses': llm_responses_deleted
+                    'deleted_llm_responses': llm_responses_deleted,
+                    'note': 'LLM responses stored in KnowledgeDocuments database'
                 }), 200
 
             except Exception as e:

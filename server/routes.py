@@ -4,7 +4,7 @@ import uuid
 import threading
 
 # Import from models and database
-from models import Folder, Document, Connection, Prompt, LlmResponse
+from models import Folder, Document, Connection, Prompt
 from database import Session
 from api.process_folder import process_folder
 from services.batch_service import batch_service

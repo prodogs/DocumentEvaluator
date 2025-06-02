@@ -17,7 +17,7 @@ from pathlib import Path
 import base64
 
 from database import Session
-from models import Folder, Document, Doc
+from models import Folder, Document
 from sqlalchemy import text, case
 from services.config import config_manager
 
@@ -32,7 +32,7 @@ class FolderPreprocessingService:
     VALID_EXTENSIONS = {
         '.pdf', '.txt', '.docx', '.doc', '.xlsx', '.xls',
         '.pptx', '.ppt', '.rtf', '.odt', '.ods', '.odp',
-        '.csv', '.tsv', '.json', '.xml', '.html', '.htm'
+        '.csv', '.tsv', '.json', '.xml', '.html', '.htm', '.md'
     }
 
     def __init__(self):
@@ -305,8 +305,8 @@ class FolderPreprocessingService:
         return True, "Valid"
 
     def _process_single_file(self, folder_id: int, file_info: Dict, results: Dict):
-        """Process a single file: validate, create document record, store in docs"""
-        from models import Document, Doc
+        """Process a single file: validate and create document record (docs table moved to KnowledgeDocuments database)"""
+        from models import Document
 
         # 1. Validate file
         is_valid, validation_reason = self._validate_file(file_info)
@@ -331,43 +331,20 @@ class FolderPreprocessingService:
         self.session.add(document)
         self.session.flush()  # Get the ID without committing
 
-        # 3. Read and encode file content
-        try:
-            with open(file_info['path'], 'rb') as f:
-                file_content = f.read()
-
-            encoded_content = base64.b64encode(file_content)
-
-            # 4. Store in docs table with file size
-            doc = Doc(
-                document_id=document.id,
-                doc_type=file_info['extension'][1:] if file_info['extension'] else 'unknown',
-                content=encoded_content,
-                file_size=file_info['size']
-            )
-            self.session.add(doc)
-
-            # 5. Update results
-            results['total_size'] += file_info['size']
-            if is_valid:
-                results['valid_files'] += 1
-            else:
-                results['invalid_files'] += 1
-                logger.info(f"📄 Invalid file: {file_info['relative_path']} - {validation_reason}")
-
-        except Exception as e:
-            # If we can't read/encode the file, mark as invalid
-            document.valid = 'N'
-            self.session.flush()
-
+        # 4. Update results (docs table moved to KnowledgeDocuments database)
+        results['total_size'] += file_info['size']
+        if is_valid:
+            results['valid_files'] += 1
+            logger.info(f"📄 Valid file: {file_info['relative_path']} - {validation_reason}")
+        else:
             results['invalid_files'] += 1
-            logger.error(f"❌ Failed to process file {file_info['path']}: {e}")
+            logger.info(f"📄 Invalid file: {file_info['relative_path']} - {validation_reason}")
 
     def get_folder_status(self, folder_id: int) -> Optional[Dict]:
-        """Get folder preprocessing status and statistics"""
+        """Get folder preprocessing status and statistics (docs table moved to KnowledgeDocuments database)"""
         session = Session()
         try:
-            from models import Folder, Document, Doc
+            from models import Folder, Document
             from sqlalchemy import func
 
             # Query folder with aggregated document statistics
@@ -378,11 +355,8 @@ class FolderPreprocessingService:
                 Folder.status,
                 func.count(Document.id).label('total_documents'),
                 func.sum(case((Document.valid == 'Y', 1), else_=0)).label('valid_documents'),
-                func.sum(case((Document.valid == 'N', 1), else_=0)).label('invalid_documents'),
-                func.coalesce(func.sum(Doc.file_size), 0).label('total_size'),
-                func.coalesce(func.sum(case((Document.valid == 'Y', Doc.file_size), else_=0)), 0).label('ready_files_size')
+                func.sum(case((Document.valid == 'N', 1), else_=0)).label('invalid_documents')
             ).outerjoin(Document, Folder.id == Document.folder_id)\
-             .outerjoin(Doc, Document.id == Doc.document_id)\
              .filter(Folder.id == folder_id)\
              .group_by(Folder.id, Folder.folder_name, Folder.folder_path, Folder.status)\
              .first()
@@ -405,8 +379,8 @@ class FolderPreprocessingService:
                     'total_files': result[4],
                     'valid_files': result[5],
                     'invalid_files': result[6],
-                    'total_size': result[7],
-                    'ready_files_size': result[8],
+                    'total_size': 0,  # File size data moved to KnowledgeDocuments database
+                    'ready_files_size': 0,  # File size data moved to KnowledgeDocuments database
                     'total_directories': directory_count,
                     'processed_files': result[4]  # For compatibility during processing
                 }

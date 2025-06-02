@@ -264,7 +264,7 @@ def traverse_directory(path, supported_extensions=None):
     """
     if supported_extensions is None:
         # Default supported document extensions
-        supported_extensions = {'.pdf', '.txt', '.docx', '.xlsx', '.doc', '.xls', '.rtf', '.odt', '.ods'}
+        supported_extensions = {'.pdf', '.txt', '.docx', '.xlsx', '.doc', '.xls', '.rtf', '.odt', '.ods', '.md'}
     else:
         # Ensure extensions are in lowercase and start with a dot
         supported_extensions = {ext.lower() if ext.startswith('.') else f'.{ext.lower()}'

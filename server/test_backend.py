@@ -93,7 +93,7 @@ def get_files_from_folder(folder_path: str) -> List[str]:
     validated_path = _validate_folder_path(folder_path)
 
     # Define supported file extensions based on the document_processor_plan.md
-    supported_extensions = [".pdf", ".txt", ".docx", ".xlsx"]
+    supported_extensions = [".pdf", ".txt", ".docx", ".xlsx", ".md"]
 
     # Use pathlib to recursively find all files with supported extensions
     files = []

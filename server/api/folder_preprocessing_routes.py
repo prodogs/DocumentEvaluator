@@ -12,7 +12,7 @@ import logging
 import os
 from services.folder_preprocessing_service import FolderPreprocessingService
 from database import Session
-from models import Folder, Document, Doc
+from models import Folder, Document
 from sqlalchemy import func, case
 
 folder_preprocessing_bp = Blueprint('folder_preprocessing', __name__)
@@ -76,11 +76,11 @@ def preprocess_folder():
             'folder_id': None
         }
 
+        # Get the current Flask app instance before starting the thread
+        app = current_app._get_current_object()
+
         # Start preprocessing in background thread
         def background_preprocessing():
-            # Get the current Flask app instance
-            app = current_app._get_current_object()
-
             # Run within application context
             with app.app_context():
                 try:
@@ -195,7 +195,7 @@ def get_ready_folders():
     """Get all folders that are ready for batch creation"""
     session = Session()
     try:
-        # Query folders with aggregated document statistics
+        # Query folders with aggregated document statistics - docs table moved to KnowledgeDocuments database
         results = session.query(
             Folder.id,
             Folder.folder_name,
@@ -204,11 +204,8 @@ def get_ready_folders():
             func.count(Document.id).label('total_documents'),
             func.sum(case((Document.valid == 'Y', 1), else_=0)).label('valid_documents'),
             func.sum(case((Document.valid == 'N', 1), else_=0)).label('invalid_documents'),
-            func.coalesce(func.sum(Doc.file_size), 0).label('total_size'),
-            func.coalesce(func.sum(case((Document.valid == 'Y', Doc.file_size), else_=0)), 0).label('ready_files_size'),
             Folder.active
         ).outerjoin(Document, Folder.id == Document.folder_id)\
-         .outerjoin(Doc, Document.id == Doc.document_id)\
          .filter(Folder.status == 'READY', Folder.active == 1)\
          .group_by(Folder.id, Folder.folder_name, Folder.folder_path, Folder.status, Folder.active)\
          .order_by(Folder.folder_name)\
@@ -224,9 +221,9 @@ def get_ready_folders():
                 'total_documents': row[4],
                 'valid_documents': row[5],
                 'invalid_documents': row[6],
-                'total_size': row[7],
-                'ready_files_size': row[8],
-                'active': bool(row[9])
+                'total_size': 0,  # File size data moved to KnowledgeDocuments database
+                'ready_files_size': 0,  # File size data moved to KnowledgeDocuments database
+                'active': bool(row[7])
             })
 
         return jsonify({
@@ -250,34 +247,34 @@ def get_folder_documents(folder_id):
         if not folder:
             return jsonify({'error': 'Folder not found'}), 404
 
-        # Get documents with their doc info using file_path natural key
-        documents_query = session.query(
-            Document.id,
-            Document.filepath,
-            Document.filename,
-            Document.valid,
-            Doc.doc_type,
-            Doc.file_size
-        ).outerjoin(Doc, Document.filepath == Doc.file_path)\
+        # Get documents - docs table moved to KnowledgeDocuments database
+        documents_query = session.query(Document)\
          .filter(Document.folder_id == folder_id)\
          .order_by(Document.filepath)\
          .all()
 
         documents = []
-        for row in documents_query:
+        for doc in documents_query:
             # Calculate relative path
-            relative_path = row[1]
-            if folder.folder_path and row[1].startswith(folder.folder_path):
-                relative_path = row[1][len(folder.folder_path):].lstrip('/')
+            relative_path = doc.filepath
+            if folder.folder_path and doc.filepath.startswith(folder.folder_path):
+                relative_path = doc.filepath[len(folder.folder_path):].lstrip('/')
+
+            # Get file info from metadata or file system
+            file_size = 0
+            doc_type = None
+            if doc.meta_data:
+                file_size = doc.meta_data.get('file_size', 0)
+                doc_type = doc.meta_data.get('file_extension', '').lstrip('.')
 
             documents.append({
-                'id': row[0],
-                'file_path': row[1],
-                'filename': row[2],
+                'id': doc.id,
+                'file_path': doc.filepath,
+                'filename': doc.filename,
                 'relative_path': relative_path,
-                'valid': row[3] == 'Y',
-                'doc_type': row[4],
-                'file_size': row[5] or 0
+                'valid': doc.valid == 'Y',
+                'doc_type': doc_type,
+                'file_size': file_size
             })
 
         return jsonify({
@@ -312,9 +309,7 @@ def reprocess_folder(folder_id):
         folder_name = folder.folder_name
         folder_path = folder.folder_path
 
-        # Delete existing docs for documents in this folder using file_path natural key
-        docs_to_delete = session.query(Doc).join(Document, Doc.file_path == Document.filepath).filter(Document.folder_id == folder_id)
-        docs_to_delete.delete(synchronize_session=False)
+        # Note: docs table moved to KnowledgeDocuments database - no cleanup needed here
 
         # Delete existing documents for this folder
         documents_to_delete = session.query(Document).filter(Document.folder_id == folder_id)

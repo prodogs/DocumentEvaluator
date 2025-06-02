@@ -382,6 +382,40 @@ const BatchManagement = ({ onNavigateBack }) => {
     }
   };
 
+  const handleResetToPrestage = async (batchId, batchName) => {
+    if (!window.confirm(`Are you sure you want to reset batch "${batchName}" to prestage state?\n\nThis will:\n• Reset the batch status to SAVED (prestage)\n• Unassign all documents from the batch\n• Clear processing progress\n• Allow you to restart the batch from the beginning\n\nThe batch configuration will be preserved, but you'll need to stage and run it again.`)) {
+      return;
+    }
+
+    try {
+      setActionLoading('reset-to-prestage');
+      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/reset-to-prestage`);
+
+      if (response.data.success) {
+        setError(null);
+        setProgressMessage(`🔄💾 Batch "${batchName}" reset to prestage state. ${response.data.next_steps}`);
+
+        // Refresh batch details
+        if (selectedBatch && selectedBatch.id === batchId) {
+          await loadBatchDetails(batchId);
+        }
+        await loadBatches();
+
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          setProgressMessage('');
+        }, 5000);
+      } else {
+        setError(response.data.error || 'Failed to reset batch to prestage');
+      }
+    } catch (error) {
+      console.error('Error resetting batch to prestage:', error);
+      setError('Failed to reset batch to prestage');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return 'N/A';
     return new Date(timestamp).toLocaleString();
@@ -478,7 +512,8 @@ const BatchManagement = ({ onNavigateBack }) => {
       'PREPARED': { text: '📋 Prepared', class: 'prepared' },
       'PROCESSING': { text: '🔄 Processing', class: 'processing' },
       'P': { text: '🔄 Processing', class: 'processing' },
-      'PA': { text: '⏸️ Paused', class: 'paused' },
+      'PAUSED': { text: '⏸️ Paused', class: 'paused' },
+      'PA': { text: '⏸️ Paused', class: 'paused' }, // Legacy compatibility
       'C': { text: '✅ Completed', class: 'completed' },
       'FAILED': { text: '❌ Failed', class: 'failed' },
       'F': { text: '❌ Failed', class: 'failed' }
@@ -624,6 +659,7 @@ const BatchManagement = ({ onNavigateBack }) => {
               onRunAnalysis={handleRunAnalysis}
               onRerunAnalysis={handleRerunAnalysis}
               onRestageAndRerun={handleRestageAndRerun}
+              onResetToPrestage={handleResetToPrestage}
               onLoadMoreResponses={handleLoadMoreResponses}
               onResponseDoubleClick={handleResponseDoubleClick}
               actionLoading={actionLoading}
@@ -661,6 +697,7 @@ const BatchDetails = ({
   onRunAnalysis,
   onRerunAnalysis,
   onRestageAndRerun,
+  onResetToPrestage,
   onLoadMoreResponses,
   onResponseDoubleClick,
   actionLoading,
@@ -756,13 +793,26 @@ const BatchDetails = ({
               </button>
             )}
 
-            {(batch.status === 'PA') && (
+            {(batch.status === 'PAUSED' || batch.status === 'PA') && (
               <button
                 onClick={() => onResumeBatch(batch.id)}
                 disabled={actionLoading === 'resume'}
                 className="btn btn-success btn-sm"
               >
                 {actionLoading === 'resume' ? '⏳' : '▶️'} Resume
+              </button>
+            )}
+
+            {/* Reset to Prestage button for stuck batches */}
+            {(batch.status === 'ANALYZING' || batch.status === 'STAGING' || batch.status === 'FAILED_STAGING' ||
+              batch.status === 'PROCESSING' || batch.status === 'P' || batch.status === 'PAUSED' || batch.status === 'PA') && (
+              <button
+                onClick={() => onResetToPrestage(batch.id, batch.batch_name)}
+                disabled={actionLoading === 'reset-to-prestage'}
+                className="btn btn-warning btn-sm"
+                title="Reset batch to prestage (SAVED) state - allows restarting from the beginning"
+              >
+                {actionLoading === 'reset-to-prestage' ? '⏳' : '🔄💾'} Reset
               </button>
             )}
 
