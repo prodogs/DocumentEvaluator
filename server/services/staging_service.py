@@ -181,17 +181,145 @@ class StagingService:
     def _perform_staging(self, session, batch_id: int, folder_ids: List[int],
                         connection_ids: List[int], prompt_ids: List[int],
                         encoding_service) -> Dict[str, Any]:
-        """DEPRECATED: Perform staging - LlmResponse and Doc moved to KnowledgeDocuments database"""
-        logger.warning(f"_perform_staging called for batch {batch_id} but LLM processing has been moved to KnowledgeDocuments database")
+        """Perform staging - prepare documents and create entries in KnowledgeDocuments"""
+        logger.info(f"Starting staging for batch {batch_id}")
         
-        return {
-            'success': False,
-            'deprecated': True,
-            'total_documents': 0,
-            'total_responses': 0,
-            'message': 'Perform staging service moved to KnowledgeDocuments database',
-            'reason': 'llm_responses and docs tables moved to separate database'
-        }
+        import psycopg2
+        import json
+        import base64
+        import os
+        
+        try:
+            # Get documents for this batch
+            documents = session.query(Document).filter(
+                Document.batch_id == batch_id
+            ).all()
+            
+            if not documents:
+                logger.warning(f"No documents found for batch {batch_id}")
+                return {
+                    'success': False,
+                    'error': 'No documents found for batch',
+                    'total_documents': 0,
+                    'total_responses': 0
+                }
+            
+            # Connect to KnowledgeDocuments database
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            documents_staged = 0
+            responses_created = 0
+            
+            for doc in documents:
+                try:
+                    # Check if file exists
+                    if not os.path.exists(doc.filepath):
+                        logger.warning(f"File not found: {doc.filepath}")
+                        continue
+                    
+                    # Read and encode file
+                    with open(doc.filepath, 'rb') as f:
+                        file_content = f.read()
+                    
+                    # Encode to base64
+                    encoded_content = base64.b64encode(file_content).decode('utf-8')
+                    
+                    # Clean encoded content - ensure it's valid base64
+                    encoded_content = encoded_content.strip()
+                    if len(encoded_content) % 4 != 0:
+                        encoded_content += '=' * (4 - len(encoded_content) % 4)
+                    
+                    # Create document ID
+                    doc_id = f"batch_{batch_id}_doc_{doc.id}"
+                    
+                    # Insert into docs table
+                    kb_cursor.execute("""
+                        INSERT INTO docs (document_id, content, content_type, doc_type, file_size, encoding, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (document_id) DO UPDATE
+                        SET content = EXCLUDED.content,
+                            file_size = EXCLUDED.file_size,
+                            created_at = NOW()
+                        RETURNING id
+                    """, (
+                        doc_id,
+                        encoded_content,
+                        'text/plain',
+                        os.path.splitext(doc.filename)[1][1:] if '.' in doc.filename else 'txt',
+                        len(file_content),
+                        'base64'
+                    ))
+                    
+                    kb_doc_id = kb_cursor.fetchone()[0]
+                    documents_staged += 1
+                    
+                    # Create LLM response entries for each connection/prompt combination
+                    for conn_id in connection_ids:
+                        # Get connection details from database
+                        connection = session.query(Connection).filter_by(id=conn_id).first()
+                        if not connection:
+                            continue
+                            
+                        conn_details = {
+                            'id': connection.id,
+                            'name': connection.name,
+                            'provider_id': connection.provider_id,
+                            'model_id': connection.model_id,
+                            'api_key': connection.api_key,
+                            'base_url': connection.base_url,
+                            'temperature': connection.temperature,
+                            'max_tokens': connection.max_tokens
+                        }
+                        
+                        for prompt_id in prompt_ids:
+                            kb_cursor.execute("""
+                                INSERT INTO llm_responses 
+                                (document_id, prompt_id, connection_id, connection_details, 
+                                 status, created_at, batch_id)
+                                VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                                ON CONFLICT DO NOTHING
+                            """, (
+                                kb_doc_id,
+                                prompt_id,
+                                conn_id,
+                                json.dumps(conn_details),
+                                'QUEUED',
+                                batch_id
+                            ))
+                            responses_created += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error staging document {doc.filename}: {e}")
+                    continue
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            logger.info(f"Staging completed for batch {batch_id}: {documents_staged} documents, {responses_created} responses")
+            
+            return {
+                'success': True,
+                'total_documents': documents_staged,
+                'total_responses': responses_created,
+                'message': f'Successfully staged {documents_staged} documents'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in _perform_staging: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'total_documents': 0,
+                'total_responses': 0
+            }
 
     def get_staging_status(self, batch_id: int) -> Dict[str, Any]:
         """DEPRECATED: Get staging status - LlmResponse and Doc moved to KnowledgeDocuments database"""

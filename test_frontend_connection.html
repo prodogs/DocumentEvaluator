@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Frontend Connection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-result {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Frontend Connection Test</h1>
+    
+    <h2>Test 1: Direct API Call</h2>
+    <button onclick="testDirectAPI()">Test Direct API (Port 5001)</button>
+    <div id="direct-result"></div>
+    
+    <h2>Test 2: Via Proxy</h2>
+    <button onclick="testProxyAPI()">Test Via Proxy (Port 5173)</button>
+    <div id="proxy-result"></div>
+    
+    <h2>Test 3: Check Ports</h2>
+    <button onclick="checkPorts()">Check All Ports</button>
+    <div id="ports-result"></div>
+
+    <script>
+        async function testDirectAPI() {
+            const resultDiv = document.getElementById('direct-result');
+            try {
+                const response = await fetch('http://localhost:5001/api/batches?limit=50');
+                const data = await response.json();
+                resultDiv.innerHTML = `
+                    <div class="test-result success">
+                        <h3>✅ Direct API Success!</h3>
+                        <p>Status: ${response.status}</p>
+                        <p>Batches found: ${data.batches ? data.batches.length : 0}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="test-result error">
+                        <h3>❌ Direct API Failed</h3>
+                        <p>Error: ${error.message}</p>
+                        <p>This might be a CORS issue or the server is not running.</p>
+                    </div>
+                `;
+            }
+        }
+        
+        async function testProxyAPI() {
+            const resultDiv = document.getElementById('proxy-result');
+            try {
+                // When running from file://, we can't use relative paths
+                // This tests if the frontend dev server proxy is working
+                const response = await fetch('http://localhost:5173/api/batches?limit=50');
+                const data = await response.json();
+                resultDiv.innerHTML = `
+                    <div class="test-result success">
+                        <h3>✅ Proxy API Success!</h3>
+                        <p>Status: ${response.status}</p>
+                        <p>The Vite proxy is working correctly.</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="test-result error">
+                        <h3>❌ Proxy API Failed</h3>
+                        <p>Error: ${error.message}</p>
+                        <p>The frontend dev server proxy might not be configured correctly.</p>
+                    </div>
+                `;
+            }
+        }
+        
+        async function checkPorts() {
+            const resultDiv = document.getElementById('ports-result');
+            let results = '<div class="test-result">';
+            
+            // Check backend
+            try {
+                await fetch('http://localhost:5001/health', {mode: 'no-cors'});
+                results += '<p>✅ Backend (5001): Reachable</p>';
+            } catch (e) {
+                results += '<p>❌ Backend (5001): Not reachable</p>';
+            }
+            
+            // Check frontend
+            try {
+                await fetch('http://localhost:5173/', {mode: 'no-cors'});
+                results += '<p>✅ Frontend (5173): Reachable</p>';
+            } catch (e) {
+                results += '<p>❌ Frontend (5173): Not reachable</p>';
+            }
+            
+            results += '</div>';
+            resultDiv.innerHTML = results;
+        }
+    </script>
+</body>
+</html>

@@ -857,11 +857,12 @@ const BatchDetails = ({
             {/* Staging Lifecycle Actions */}
             {(batch.status === 'SAVED' || batch.status === 'FAILED_STAGING') && (
               <button
-                onClick={() => onReprocessStaging(batch.id, batch.batch_name)}
-                disabled={actionLoading === 'reprocess-staging'}
+                onClick={() => alert('Staging is currently unavailable. LLM processing has been moved to KnowledgeDocuments system. Use external processing tools.')}
+                disabled={true}
                 className="btn btn-primary btn-sm"
+                title="This functionality has been moved to KnowledgeDocuments system"
               >
-                {actionLoading === 'reprocess-staging' ? '⏳' : '⚙️'} {batch.status === 'SAVED' ? 'Stage' : 'Restage'}
+                ⚙️ {batch.status === 'SAVED' ? 'Stage' : 'Restage'} (Unavailable)
               </button>
             )}
 
@@ -878,19 +879,20 @@ const BatchDetails = ({
             {batch.status === 'COMPLETED' && (
               <>
                 <button
-                  onClick={() => onRerunAnalysis(batch.id, batch.batch_name)}
-                  disabled={actionLoading === 'rerun-analysis'}
+                  onClick={() => alert('Rerun Analysis is currently unavailable. LLM processing has been moved to KnowledgeDocuments system.')}
+                  disabled={true}
                   className="btn btn-secondary btn-sm"
+                  title="This functionality has been moved to KnowledgeDocuments system"
                 >
-                  {actionLoading === 'rerun-analysis' ? '⏳' : '🔄'} Rerun Analysis
+                  🔄 Rerun Analysis (Unavailable)
                 </button>
                 <button
-                  onClick={() => onRestageAndRerun(batch.id, batch.batch_name)}
-                  disabled={actionLoading === 'restage-and-rerun'}
+                  onClick={() => alert('Restage & Rerun is currently unavailable. LLM processing has been moved to KnowledgeDocuments system.')}
+                  disabled={true}
                   className="btn btn-warning btn-sm"
-                  title="Refresh documents and recreate all LLM responses"
+                  title="This functionality has been moved to KnowledgeDocuments system"
                 >
-                  {actionLoading === 'restage-and-rerun' ? '⏳' : '🔄📄'} Restage & Rerun
+                  🔄📄 Restage & Rerun (Unavailable)
                 </button>
               </>
             )}

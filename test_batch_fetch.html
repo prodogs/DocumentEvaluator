@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Batch Fetch</title>
+</head>
+<body>
+    <h1>Test Batch Fetch</h1>
+    <div id="result"></div>
+    <script>
+        const API_BASE_URL = 'http://localhost:5001';
+        
+        fetch(`${API_BASE_URL}/api/batches?limit=50`)
+            .then(response => {
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                return response.json();
+            })
+            .then(data => {
+                console.log('Data received:', data);
+                document.getElementById('result').innerHTML = `
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = `
+                    <p style="color: red;">Error: ${error.message}</p>
+                `;
+            });
+    </script>
+</body>
+</html>

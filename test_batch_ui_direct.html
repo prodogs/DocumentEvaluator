@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Batch UI Direct</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .batch-list {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .batch-item {
+            background: #f5f5f5;
+            margin: 5px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+        .success {
+            color: green;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Direct Batch API Test</h1>
+    
+    <button onclick="testBatchAPI()">Test Batch API</button>
+    <button onclick="checkFrontend()">Check Frontend Status</button>
+    
+    <div id="status"></div>
+    <div id="result"></div>
+    
+    <script>
+        const API_BASE_URL = 'http://localhost:5001';
+        const FRONTEND_URL = 'http://localhost:5173';
+        
+        async function testBatchAPI() {
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            
+            statusDiv.innerHTML = '<p>Testing batch API...</p>';
+            
+            try {
+                // Test 1: Check health
+                const healthResponse = await fetch(`${API_BASE_URL}/api/health`);
+                const healthData = await healthResponse.json();
+                statusDiv.innerHTML += `<p class="success">✓ Health check: ${JSON.stringify(healthData)}</p>`;
+                
+                // Test 2: Load batches
+                const batchesResponse = await fetch(`${API_BASE_URL}/api/batches?limit=50`);
+                const batchesData = await batchesResponse.json();
+                
+                if (batchesData.success) {
+                    statusDiv.innerHTML += `<p class="success">✓ Batches loaded: ${batchesData.count} batches found</p>`;
+                    
+                    // Display batches
+                    let batchHtml = '<div class="batch-list"><h3>Batches:</h3>';
+                    batchesData.batches.forEach(batch => {
+                        batchHtml += `
+                            <div class="batch-item">
+                                <strong>Batch #${batch.batch_number} - ${batch.batch_name}</strong><br>
+                                Status: ${batch.status}<br>
+                                Documents: ${batch.total_documents}<br>
+                                Completion: ${batch.completion_percentage}%<br>
+                                Created: ${new Date(batch.created_at).toLocaleString()}
+                            </div>
+                        `;
+                    });
+                    batchHtml += '</div>';
+                    resultDiv.innerHTML = batchHtml;
+                } else {
+                    statusDiv.innerHTML += `<p class="error">✗ Failed to load batches</p>`;
+                }
+                
+            } catch (error) {
+                statusDiv.innerHTML += `<p class="error">✗ Error: ${error.message}</p>`;
+                console.error('Error:', error);
+            }
+        }
+        
+        async function checkFrontend() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                const response = await fetch(FRONTEND_URL);
+                if (response.ok) {
+                    statusDiv.innerHTML = `<p class="success">✓ Frontend is running at ${FRONTEND_URL}</p>`;
+                    statusDiv.innerHTML += `<p>You can access the Batch Management UI at: <a href="${FRONTEND_URL}" target="_blank">${FRONTEND_URL}</a></p>`;
+                    statusDiv.innerHTML += `<p>Make sure to navigate to the Batch Management tab in the UI</p>`;
+                } else {
+                    statusDiv.innerHTML = `<p class="error">✗ Frontend returned status: ${response.status}</p>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<p class="error">✗ Frontend not accessible: ${error.message}</p>`;
+            }
+        }
+        
+        // Auto-run test on page load
+        window.onload = () => {
+            testBatchAPI();
+        };
+    </script>
+</body>
+</html>

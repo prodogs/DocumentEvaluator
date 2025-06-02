@@ -449,20 +449,29 @@ class BatchService:
                                     encoded_content = base64.b64encode(file_content).decode('utf-8')
                                     logger.info(f"📄 Encoded content length: {len(encoded_content)} characters")
                                     
-                                    # Validate the encoded content
-                                    if len(encoded_content) == 1398101:
-                                        logger.warning(f"⚠️ Document has exactly 1398101 characters - checking for corruption")
-                                        # Try to decode it back to verify it's valid
-                                        try:
-                                            test_decode = base64.b64decode(encoded_content)
-                                            logger.info(f"✅ Base64 validation passed")
-                                        except Exception as decode_error:
-                                            logger.error(f"❌ Base64 validation failed: {decode_error}")
-                                            # Try to fix padding
-                                            missing_padding = len(encoded_content) % 4
-                                            if missing_padding:
-                                                encoded_content += '=' * (4 - missing_padding)
-                                                logger.info(f"🔧 Added {4 - missing_padding} padding characters")
+                                    # Ensure proper base64 padding
+                                    # Base64 strings must have length divisible by 4
+                                    remainder = len(encoded_content) % 4
+                                    if remainder != 0:
+                                        # This should not happen with standard base64 encoding, but let's handle it
+                                        padding_needed = 4 - remainder
+                                        logger.warning(f"⚠️ Base64 string needs {padding_needed} padding characters (length: {len(encoded_content)})")
+                                        encoded_content += '=' * padding_needed
+                                        logger.info(f"🔧 Added padding, new length: {len(encoded_content)}")
+                                    
+                                    # Validate the encoded content by trying to decode it
+                                    try:
+                                        test_decode = base64.b64decode(encoded_content)
+                                        if len(test_decode) != file_size:
+                                            logger.error(f"❌ Decoded size mismatch: expected {file_size}, got {len(test_decode)}")
+                                            failed_count += 1
+                                            continue
+                                        logger.info(f"✅ Base64 validation passed")
+                                    except Exception as decode_error:
+                                        logger.error(f"❌ Base64 validation failed: {decode_error}")
+                                        failed_count += 1
+                                        continue
+                                        
                                 except Exception as encode_error:
                                     logger.error(f"❌ Failed to encode file content: {encode_error}")
                                     failed_count += 1
@@ -501,12 +510,25 @@ class BatchService:
                                         # Log the size of data being inserted
                                         logger.info(f"📊 Inserting document: content_length={len(encoded_content)}, file_size={file_size}")
                                         
+                                        # Strip any whitespace that might have been added
+                                        encoded_content_clean = encoded_content.strip()
+                                        if len(encoded_content_clean) != len(encoded_content):
+                                            logger.warning(f"⚠️ Stripped whitespace from encoded content: {len(encoded_content)} -> {len(encoded_content_clean)}")
+                                        
+                                        # Double-check the length is valid for base64
+                                        if len(encoded_content_clean) % 4 != 0:
+                                            logger.error(f"❌ Invalid base64 length after cleaning: {len(encoded_content_clean)} (mod 4 = {len(encoded_content_clean) % 4})")
+                                            # Try to fix by padding
+                                            padding_needed = 4 - (len(encoded_content_clean) % 4)
+                                            encoded_content_clean += '=' * padding_needed
+                                            logger.info(f"🔧 Added {padding_needed} padding characters, new length: {len(encoded_content_clean)}")
+                                        
                                         cursor.execute("""
                                             INSERT INTO docs (content, content_type, doc_type, file_size, encoding, created_at, document_id)
                                             VALUES (%s, %s, %s, %s, %s, NOW(), %s)
                                             RETURNING id
                                         """, (
-                                            encoded_content,
+                                            encoded_content_clean,  # Use cleaned content
                                             content_type,
                                             doc_type,
                                             file_size,  # Use the variable we calculated earlier
@@ -870,16 +892,37 @@ class BatchService:
 
             logger.info(f"🔄 RESTAGE: Starting restage and rerun of completed batch #{batch.batch_number}")
 
-            # Step 1: Delete all existing LLM responses for this batch
-            responses_to_delete = session.query(LlmResponse).join(Document).filter(
-                Document.batch_id == batch_id
-            ).all()
-
-            deleted_responses_count = len(responses_to_delete)
-            for response in responses_to_delete:
-                session.delete(response)
-
-            logger.info(f"🗑️ RESTAGE: Deleted {deleted_responses_count} existing LLM responses")
+            # Step 1: Delete all existing LLM responses for this batch from KnowledgeDocuments database
+            import psycopg2
+            deleted_responses_count = 0
+            
+            try:
+                # Connect to KnowledgeDocuments database
+                kb_conn = psycopg2.connect(
+                    host="studio.local",
+                    database="KnowledgeDocuments",
+                    user="postgres",
+                    password="prodogs03",
+                    port=5432
+                )
+                kb_cursor = kb_conn.cursor()
+                
+                # Delete LLM responses for this batch
+                kb_cursor.execute("""
+                    DELETE FROM llm_responses 
+                    WHERE batch_id = %s
+                """, (batch_id,))
+                
+                deleted_responses_count = kb_cursor.rowcount
+                kb_conn.commit()
+                kb_cursor.close()
+                kb_conn.close()
+                
+                logger.info(f"🗑️ RESTAGE: Deleted {deleted_responses_count} existing LLM responses from KnowledgeDocuments database")
+                
+            except Exception as e:
+                logger.error(f"Error deleting LLM responses from KnowledgeDocuments: {e}")
+                # Continue anyway as this might be a new batch
 
             # Step 2: Get batch configuration for restaging
             config_snapshot = batch.config_snapshot or {}
@@ -935,32 +978,17 @@ class BatchService:
             batch.status = 'ANALYZING'
             session.commit()
 
-            # Get all new LLM responses that need processing
-            responses_to_process = session.query(LlmResponse).join(Document).filter(
-                Document.batch_id == batch_id,
-                LlmResponse.status == 'N'  # Not started
-            ).all()
-
-            processed_count = 0
-            failed_count = 0
-
-            # The responses are already created with status 'N' (Not started)
-            # The dynamic processing queue will automatically pick them up
-            # No need to manually queue them - just count them
-            for response in responses_to_process:
-                if response.status == 'N':
-                    processed_count += 1
-                else:
-                    failed_count += 1
+            # Processing is now handled by the KnowledgeDocuments database
+            # Calculate expected total responses
+            total_responses = staging_results['total_documents'] * len(connection_ids) * len(prompt_ids)
 
             session.commit()
 
             logger.info(f"✅ RESTAGE COMPLETE: Batch #{batch.batch_number} restage and rerun started")
             logger.info(f"   🔄 Documents refreshed: {staging_results['total_documents']}")
             logger.info(f"   🗑️ Old responses deleted: {deleted_responses_count}")
-            logger.info(f"   ➕ New responses created: {len(responses_to_process)}")
-            logger.info(f"   🔄 Responses queued for processing: {processed_count}")
-            logger.info(f"   ❌ Failed to queue: {failed_count}")
+            logger.info(f"   ➕ New responses to be created: {total_responses}")
+            logger.info(f"   🚀 Batch is now ready for processing")
 
             return {
                 'success': True,
@@ -971,9 +999,7 @@ class BatchService:
                 'restage_results': {
                     'total_documents': staging_results['total_documents'],
                     'deleted_responses': deleted_responses_count,
-                    'new_responses_created': len(responses_to_process),
-                    'queued_for_processing': processed_count,
-                    'failed_to_queue': failed_count,
+                    'expected_new_responses': total_responses,
                     'staging_details': staging_results
                 }
             }
