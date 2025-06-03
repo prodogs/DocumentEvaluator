@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test LLM Responses Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .api-test {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f8f8;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .api-test h3 {
+            margin-top: 0;
+            color: #667eea;
+        }
+        pre {
+            background: #263238;
+            color: #aed581;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .error {
+            color: #d32f2f;
+            background: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            color: #388e3c;
+            background: #e8f5e9;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #5a67d8;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>🔍 LLM Responses Viewer Test Page</h1>
+        
+        <div class="api-test">
+            <h3>API Endpoint Test</h3>
+            <p>Testing: <code>GET /api/llm-responses?limit=5</code></p>
+            <button onclick="testAPI()">Test API</button>
+            <button onclick="testFiltering()">Test Filtering</button>
+            <button onclick="testStats()">Test Stats</button>
+            <div id="apiResult"></div>
+        </div>
+        
+        <div class="api-test">
+            <h3>Component Features</h3>
+            <ul>
+                <li>✅ Grid, List, and Compact view modes</li>
+                <li>✅ Advanced filtering (search, status, score range, date range)</li>
+                <li>✅ Infinite scroll pagination</li>
+                <li>✅ Detailed modal view with tabs</li>
+                <li>✅ Score visualization and status indicators</li>
+                <li>✅ Copy functionality for response data</li>
+                <li>✅ Responsive design with dark mode support</li>
+            </ul>
+        </div>
+        
+        <div class="api-test">
+            <h3>UI Navigation</h3>
+            <p>To access the LLM Responses Viewer in the application:</p>
+            <ol>
+                <li>Navigate to <a href="http://localhost:5173" target="_blank">http://localhost:5173</a></li>
+                <li>Click on the "🔍 Responses" tab in the navigation menu</li>
+                <li>The viewer will load with all LLM responses</li>
+            </ol>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:5001';
+        
+        async function testAPI() {
+            const resultDiv = document.getElementById('apiResult');
+            resultDiv.innerHTML = '<p>Testing API...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/llm-responses?limit=5`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✅ API Working!</div>
+                        <p>Total responses: ${data.pagination.total}</p>
+                        <p>Showing ${data.responses.length} responses</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">❌ API Error: ${response.status}</div>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">❌ Network Error: ${error.message}</div>
+                `;
+            }
+        }
+        
+        async function testFiltering() {
+            const resultDiv = document.getElementById('apiResult');
+            resultDiv.innerHTML = '<p>Testing filtering...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/llm-responses?limit=5&status=COMPLETED&sort=score_desc`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✅ Filtering Working!</div>
+                        <p>Query: status=COMPLETED, sort=score_desc</p>
+                        <p>Found ${data.pagination.total} completed responses</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">❌ API Error: ${response.status}</div>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">❌ Network Error: ${error.message}</div>
+                `;
+            }
+        }
+        
+        async function testStats() {
+            const resultDiv = document.getElementById('apiResult');
+            resultDiv.innerHTML = '<p>Testing stats endpoint...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/llm-responses/stats`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✅ Stats Endpoint Working!</div>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">❌ API Error: ${response.status}</div>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">❌ Network Error: ${error.message}</div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>

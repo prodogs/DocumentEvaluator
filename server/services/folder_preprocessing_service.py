@@ -20,6 +20,7 @@ from database import Session
 from models import Folder, Document
 from sqlalchemy import text, case
 from services.config import config_manager
+from services.document_type_service import document_type_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,13 +28,6 @@ logger = logging.getLogger(__name__)
 
 class FolderPreprocessingService:
     """Service for preprocessing folders before batch creation"""
-
-    # File validation criteria
-    VALID_EXTENSIONS = {
-        '.pdf', '.txt', '.docx', '.doc', '.xlsx', '.xls',
-        '.pptx', '.ppt', '.rtf', '.odt', '.ods', '.odp',
-        '.csv', '.tsv', '.json', '.xml', '.html', '.htm', '.md'
-    }
 
     def __init__(self):
         self.session = None
@@ -291,9 +285,13 @@ class FolderPreprocessingService:
         if file_info['size'] > self.max_file_size:
             return False, f"File too large (>{self.doc_config.max_file_size_display})"
 
-        # Check file extension
-        if file_info['extension'] not in self.VALID_EXTENSIONS:
-            return False, f"Unsupported file type: {file_info['extension']}"
+        # Check file extension using document type service
+        if not document_type_service.is_valid_file_type(file_info['name']):
+            file_type_info = document_type_service.get_file_type_info(file_info['name'])
+            if file_type_info['extension']:
+                return False, f"Unsupported file type: {file_type_info['extension']} - {file_type_info['description']}"
+            else:
+                return False, f"Unsupported file type: {file_info['extension']}"
 
         # Check if file is readable
         try:

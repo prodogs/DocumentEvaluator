@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Prompt Tabs Feature</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f8f8;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .test-section h3 {
+            margin-top: 0;
+            color: #667eea;
+        }
+        .code-block {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #5a67d8;
+        }
+        .success {
+            color: #388e3c;
+            background: #e8f5e9;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .error {
+            color: #d32f2f;
+            background: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .info {
+            color: #1976d2;
+            background: #e3f2fd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        #testResult {
+            margin-top: 20px;
+        }
+        .screenshot-info {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>🧪 Test Prompt Tabs Feature</h1>
+        
+        <div class="test-section">
+            <h3>Feature Description</h3>
+            <p>The Response tab now displays multiple prompts as sub-tabs when available. Each prompt tab shows:</p>
+            <ul>
+                <li><strong>Prompt Details Form (Left Side):</strong>
+                    <ul>
+                        <li>Prompt ID</li>
+                        <li>Description</li>
+                        <li>Prompt Text (full text in monospace font)</li>
+                        <li>Model Name</li>
+                        <li>Provider Type</li>
+                    </ul>
+                </li>
+                <li><strong>Response Section (Right Side):</strong>
+                    <ul>
+                        <li>Analysis text (formatted)</li>
+                        <li>Scores (if available)</li>
+                        <li>Metrics (tokens, processing time)</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+
+        <div class="test-section">
+            <h3>Test Scenarios</h3>
+            <div class="info">
+                <strong>Scenario 1:</strong> Single Prompt Response<br>
+                When a response has only one prompt, no tabs are shown, and the form displays directly.
+            </div>
+            <div class="info">
+                <strong>Scenario 2:</strong> Multiple Prompts Response<br>
+                When a response has multiple prompts in the response_json.prompts array, tabs appear at the top.
+            </div>
+            <div class="info">
+                <strong>Scenario 3:</strong> Legacy Response Format<br>
+                Older responses without the prompts array fall back to showing the single prompt data.
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>Sample Multi-Prompt Response Data</h3>
+            <div class="code-block">
+{
+  "response_json": {
+    "prompts": [
+      {
+        "prompt": "Analyze the technical accuracy of this document",
+        "description": "Technical Accuracy Check",
+        "response": "The document demonstrates high technical accuracy..."
+      },
+      {
+        "prompt": "Evaluate the document's clarity and readability",
+        "description": "Clarity Assessment",
+        "response": "The document is well-structured with clear sections..."
+      },
+      {
+        "prompt": "Check for completeness and coverage",
+        "description": "Completeness Review",
+        "response": "The document covers all essential topics..."
+      }
+    ],
+    "raw_data": {
+      "analysis": "Overall analysis of the document...",
+      "scoring_result": {
+        "overall_score": 85
+      },
+      "input_tokens": 1500,
+      "output_tokens": 800,
+      "time_taken_seconds": 3.5
+    }
+  }
+}
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>API Test</h3>
+            <p>Test the API to ensure it returns data in the expected format:</p>
+            <button onclick="testAPI()">Test API Response Format</button>
+            <button onclick="testSinglePrompt()">Test Single Prompt</button>
+            <button onclick="testMultiPrompt()">Test Multiple Prompts</button>
+            <div id="testResult"></div>
+        </div>
+
+        <div class="screenshot-info">
+            <h3>📸 How to Test in the UI</h3>
+            <ol>
+                <li>Navigate to <a href="http://localhost:5173" target="_blank">http://localhost:5173</a></li>
+                <li>Click on the "🔍 Responses" tab</li>
+                <li>Click on any response card to open the detail modal</li>
+                <li>Click on the "💬 Response" tab in the modal</li>
+                <li>If the response has multiple prompts, you'll see prompt tabs at the top</li>
+                <li>Click on different prompt tabs to see the form-like UI with prompt details</li>
+            </ol>
+            <p><strong>Visual Indicators:</strong></p>
+            <ul>
+                <li>Active prompt tab has blue background (#0d6efd)</li>
+                <li>Prompt form has gray background (#f8f9fa)</li>
+                <li>Response section has white background</li>
+                <li>Two-column layout with prompt details on left, response on right</li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:5001';
+        
+        async function testAPI() {
+            const resultDiv = document.getElementById('testResult');
+            resultDiv.innerHTML = '<p>Testing API response format...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/llm-responses?limit=1`);
+                const data = await response.json();
+                
+                if (response.ok && data.responses.length > 0) {
+                    const firstResponse = data.responses[0];
+                    resultDiv.innerHTML = `
+                        <div class="success">✅ API is working!</div>
+                        <p><strong>Response Structure:</strong></p>
+                        <div class="code-block">${JSON.stringify(firstResponse, null, 2)}</div>
+                        <p><strong>Has response_json:</strong> ${firstResponse.response_json ? 'Yes' : 'No'}</p>
+                        <p><strong>Has prompts array:</strong> ${firstResponse.response_json?.prompts ? 'Yes' : 'No'}</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">❌ No responses found in database</div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">❌ API Error: ${error.message}</div>
+                `;
+            }
+        }
+        
+        function testSinglePrompt() {
+            const resultDiv = document.getElementById('testResult');
+            
+            const sampleData = {
+                id: 1,
+                prompt: {
+                    prompt_text: "Analyze this document for technical accuracy",
+                    description: "Technical Review"
+                },
+                response_text: "The document appears to be technically accurate...",
+                connection: {
+                    model_name: "gpt-4",
+                    provider_type: "openai"
+                }
+            };
+            
+            resultDiv.innerHTML = `
+                <div class="success">✅ Single Prompt Test Data</div>
+                <p>This simulates a response with a single prompt (no tabs should appear):</p>
+                <div class="code-block">${JSON.stringify(sampleData, null, 2)}</div>
+            `;
+        }
+        
+        function testMultiPrompt() {
+            const resultDiv = document.getElementById('testResult');
+            
+            const sampleData = {
+                id: 2,
+                response_json: {
+                    prompts: [
+                        {
+                            prompt: "Analyze technical accuracy",
+                            description: "Technical Review",
+                            response: "High technical accuracy observed..."
+                        },
+                        {
+                            prompt: "Evaluate clarity",
+                            description: "Clarity Check",
+                            response: "Document is clear and well-structured..."
+                        },
+                        {
+                            prompt: "Check completeness",
+                            description: "Completeness Review",
+                            response: "All topics are covered comprehensively..."
+                        }
+                    ],
+                    raw_data: {
+                        analysis: "Overall excellent document",
+                        scoring_result: {
+                            overall_score: 92
+                        },
+                        input_tokens: 2000,
+                        output_tokens: 1200,
+                        time_taken_seconds: 4.2
+                    }
+                },
+                connection: {
+                    model_name: "claude-3-opus",
+                    provider_type: "anthropic"
+                }
+            };
+            
+            resultDiv.innerHTML = `
+                <div class="success">✅ Multiple Prompts Test Data</div>
+                <p>This simulates a response with multiple prompts (tabs should appear):</p>
+                <div class="code-block">${JSON.stringify(sampleData, null, 2)}</div>
+                <p><strong>Expected UI:</strong></p>
+                <ul>
+                    <li>3 prompt tabs: "Technical Review", "Clarity Check", "Completeness Review"</li>
+                    <li>Each tab shows its own prompt text and response</li>
+                    <li>Form-like layout with labels and values</li>
+                </ul>
+            `;
+        }
+    </script>
+</body>
+</html>

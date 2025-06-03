@@ -12,9 +12,7 @@ import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from services.batch_service import batch_service
-from services.batch_archive_service import batch_archive_service
-from services.batch_cleanup_service import batch_cleanup_service
-from services.staging_service import staging_service
+# Staging functionality now integrated into BatchService
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +43,7 @@ def register_batch_routes(app):
     def save_analysis():
         """Save analysis configuration as a batch with SAVED status"""
         try:
-            data = request.get_json()
+            data = request.get_json(force=True, silent=True)
             logger.info(f"📥 Received batch save request with data: {data}")
 
             if not data:
@@ -97,98 +95,19 @@ def register_batch_routes(app):
                     'error': 'At least one prompt must be selected'
                 }), 400
 
-            # Create batch directly since staging service is deprecated
-            from database import Session
-            from models import Batch, Folder, Connection, Prompt
-            from sqlalchemy.sql import func
+            # Use unified batch service to save batch
+            result = batch_service.save_batch(
+                folder_ids=folder_ids,
+                connection_ids=connection_ids,
+                prompt_ids=prompt_ids,
+                batch_name=batch_name,
+                meta_data=meta_data
+            )
 
-            session = Session()
-            try:
-                # Get the next batch number
-                max_batch_number = session.query(func.max(Batch.batch_number)).scalar()
-                next_batch_number = (max_batch_number or 0) + 1
-
-                # Create configuration snapshot
-                from datetime import datetime
-                config_snapshot = {
-                    'folders': [],
-                    'connections': [],
-                    'prompts': [],
-                    'created_at': datetime.now().isoformat()
-                }
-
-                # Get folder details
-                for folder_id in folder_ids:
-                    folder = session.query(Folder).filter_by(id=folder_id).first()
-                    if folder:
-                        config_snapshot['folders'].append({
-                            'id': folder.id,
-                            'folder_name': folder.folder_name,
-                            'folder_path': folder.folder_path,
-                            'status': folder.status
-                        })
-
-                # Get connection details
-                for connection_id in connection_ids:
-                    connection = session.query(Connection).filter_by(id=connection_id).first()
-                    if connection:
-                        config_snapshot['connections'].append({
-                            'id': connection.id,
-                            'name': connection.name,
-                            'provider_id': connection.provider_id,
-                            'model_id': connection.model_id,
-                            'is_active': connection.is_active
-                        })
-
-                # Get prompt details
-                for prompt_id in prompt_ids:
-                    prompt = session.query(Prompt).filter_by(id=prompt_id).first()
-                    if prompt:
-                        config_snapshot['prompts'].append({
-                            'id': prompt.id,
-                            'prompt_text': prompt.prompt_text,
-                            'description': prompt.description,
-                            'active': prompt.active
-                        })
-
-                # Create the batch with SAVED status
-                batch = Batch(
-                    batch_number=next_batch_number,
-                    batch_name=batch_name,
-                    description=f"Saved batch with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts",
-                    folder_ids=folder_ids,
-                    meta_data=meta_data,
-                    config_snapshot=config_snapshot,  # Store the configuration snapshot
-                    status='SAVED',  # Saved but not staged
-                    total_documents=0,
-                    processed_documents=0
-                )
-
-                session.add(batch)
-                session.commit()
-
-                logger.info(f"✅ Created batch #{next_batch_number} - {batch_name} with SAVED status")
-
-                result = {
-                    'success': True,
-                    'batch_id': batch.id,
-                    'batch_number': batch.batch_number,
-                    'batch_name': batch.batch_name,
-                    'status': batch.status,
-                    'message': f'Batch #{batch.batch_number} saved successfully'
-                }
-
+            if result['success']:
                 return jsonify(result), 200
-
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Error creating batch: {e}", exc_info=True)
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
-            finally:
-                session.close()
+            else:
+                return jsonify(result), 400
 
         except Exception as e:
             logger.error(f"Error saving analysis: {e}", exc_info=True)
@@ -201,7 +120,7 @@ def register_batch_routes(app):
     def stage_analysis():
         """Stage analysis: create batch and start preprocessing"""
         try:
-            data = request.get_json()
+            data = request.get_json(force=True, silent=True)
             if not data:
                 return jsonify({
                     'success': False,
@@ -238,11 +157,12 @@ def register_batch_routes(app):
                     'error': 'At least one prompt must be selected'
                 }), 400
 
-            result = staging_service.stage_analysis(
+            # Use unified batch service to stage batch
+            result = batch_service.stage_batch(
                 folder_ids=folder_ids,
+                connection_ids=connection_ids,
+                prompt_ids=prompt_ids,
                 batch_name=batch_name,
-                connection_ids=connection_ids,  # ✅ FIX: Pass selected connections
-                prompt_ids=prompt_ids,  # ✅ FIX: Pass selected prompts
                 meta_data=meta_data
             )
 
@@ -258,14 +178,38 @@ def register_batch_routes(app):
                 'error': str(e)
             }), 500
 
+    @app.route('/api/batches/<int:batch_id>/stage', methods=['POST'])
+    def stage_saved_batch(batch_id):
+        """Stage a saved batch - prepare documents for processing"""
+        try:
+            logger.info(f"Stage batch requested for batch {batch_id}")
+
+            # Use centralized state management with 'stage' action
+            result = batch_service.request_state_change(batch_id, 'stage', {})
+
+            if result['success']:
+                logger.info(f"Batch {batch_id} staging completed successfully")
+                return jsonify(result), 200
+            else:
+                logger.warning(f"Batch {batch_id} staging failed: {result.get('error', 'Unknown error')}")
+                return jsonify(result), 400
+
+        except Exception as e:
+            logger.error(f"Error staging batch {batch_id}: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'batch_id': batch_id
+            }), 500
+
     @app.route('/api/batches/<int:batch_id>/reprocess-staging', methods=['POST'])
     def reprocess_staging(batch_id):
         """Reprocess staging for a batch - prepare documents and update batch status"""
         try:
             logger.info(f"Reprocess staging requested for batch {batch_id}")
 
-            # Use the restored staging service
-            result = staging_service.reprocess_existing_batch_staging(batch_id)
+            # Use centralized state management
+            result = batch_service.request_state_change(batch_id, 'restage', {})
 
             if result['success']:
                 logger.info(f"Batch {batch_id} staging completed successfully")
@@ -286,8 +230,8 @@ def register_batch_routes(app):
     def rerun_analysis(batch_id):
         """Rerun analysis for a completed batch"""
         try:
-            # Use the new rerun_batch method that properly resets LLM responses
-            result = batch_service.rerun_batch(batch_id)
+            # Use centralized state management
+            result = batch_service.request_state_change(batch_id, 'rerun', {})
 
             if result['success']:
                 return jsonify(result), 200
@@ -301,34 +245,6 @@ def register_batch_routes(app):
                 'error': str(e)
             }), 500
 
-    @app.route('/api/batches/<int:batch_id>/restage-and-rerun', methods=['POST'])
-    def restage_and_rerun_analysis(batch_id):
-        """Restage and rerun analysis for a completed batch - refreshes documents and recreates LLM responses"""
-        try:
-            result = batch_service.restage_and_rerun_batch(batch_id)
-
-            if result['success']:
-                return jsonify({
-                    'success': True,
-                    'message': f'Batch {batch_id} restage and rerun started successfully',
-                    'batch_id': batch_id,
-                    'batch_number': result.get('batch_number'),
-                    'batch_name': result.get('batch_name'),
-                    'status': result.get('status', 'ANALYZING'),
-                    'restage_results': result.get('restage_results', {})
-                }), 200
-            else:
-                return jsonify({
-                    'success': False,
-                    'error': result['error']
-                }), 400
-
-        except Exception as e:
-            logger.error(f"Error restaging and rerunning batch {batch_id}: {e}", exc_info=True)
-            return jsonify({
-                'success': False,
-                'error': str(e)
-            }), 500
 
     @app.route('/api/batches', methods=['GET'])
     def list_batches():
@@ -378,7 +294,7 @@ def register_batch_routes(app):
     def update_batch_name(batch_id):
         """Update the name and description of a batch"""
         try:
-            data = request.get_json()
+            data = request.get_json(force=True, silent=True)
             if not data:
                 return jsonify({
                     'success': False,
@@ -735,7 +651,10 @@ def register_batch_routes(app):
                         'filepath': document_obj.filepath if document_obj else 'Unknown path',
                         'document': {
                             'filename': document_obj.filename if document_obj else 'Unknown document',
-                            'filepath': document_obj.filepath if document_obj else 'Unknown path'
+                            'filepath': document_obj.filepath if document_obj else 'Unknown path',
+                            'doc_type': document_obj.doc_type if document_obj else 'Unknown',
+                            'file_size': document_obj.file_size if document_obj else None,
+                            'id': document_obj.id if document_obj else None
                         },
                         'prompt_id': prompt_id,
                         'prompt': {
@@ -840,7 +759,8 @@ def register_batch_routes(app):
     def pause_batch(batch_id):
         """Pause a batch - stops new documents from being submitted but allows current processing to continue"""
         try:
-            result = batch_service.pause_batch(batch_id)
+            # Use centralized state management
+            result = batch_service.request_state_change(batch_id, 'pause', {})
 
             if result['success']:
                 return jsonify(result), 200
@@ -858,7 +778,8 @@ def register_batch_routes(app):
     def resume_batch(batch_id):
         """Resume a paused batch - allows new documents to be submitted for processing"""
         try:
-            result = batch_service.resume_batch(batch_id)
+            # Use centralized state management
+            result = batch_service.request_state_change(batch_id, 'resume', {})
 
             if result['success']:
                 return jsonify(result), 200
@@ -876,7 +797,8 @@ def register_batch_routes(app):
     def reset_batch_to_prestage(batch_id):
         """Reset a stuck batch back to prestage (SAVED) state"""
         try:
-            result = batch_service.reset_batch_to_prestage(batch_id)
+            # Use centralized state management
+            result = batch_service.request_state_change(batch_id, 'reset', {})
 
             if result['success']:
                 return jsonify(result), 200
@@ -894,7 +816,7 @@ def register_batch_routes(app):
     def delete_batch(batch_id):
         """Archive and delete a batch with all associated data"""
         try:
-            data = request.get_json() or {}
+            data = request.get_json(force=True, silent=True) or {}
             archived_by = data.get('archived_by', 'User')
             archive_reason = data.get('archive_reason', 'Manual deletion via UI')
 
@@ -963,74 +885,71 @@ def register_batch_routes(app):
                 'error': str(e)
             }), 500
 
-    @app.route('/api/batches/archived', methods=['GET'])
-    def list_archived_batches():
-        """List archived batches"""
+
+    @app.route('/api/batches/<int:batch_id>/check-completion', methods=['POST'])
+    def check_batch_completion(batch_id):
+        """Manually trigger batch completion check for a specific batch"""
         try:
-            limit = request.args.get('limit', 50, type=int)
-            archived_batches = batch_archive_service.list_archived_batches(limit=limit)
-
-            return jsonify({
-                'success': True,
-                'archived_batches': archived_batches,
-                'count': len(archived_batches)
-            })
-
+            logger.info(f"Manual batch completion check requested for batch {batch_id}")
+            
+            # Call the completion check method directly
+            result = batch_service.check_and_update_batch_completion(batch_id)
+            
+            if result:
+                return jsonify({
+                    'success': True,
+                    'message': f'Batch {batch_id} completion check completed - batch is now COMPLETED',
+                    'batch_completed': True
+                }), 200
+            else:
+                return jsonify({
+                    'success': True,
+                    'message': f'Batch {batch_id} completion check completed - batch is still processing',
+                    'batch_completed': False
+                }), 200
+                
         except Exception as e:
-            logger.error(f"Error listing archived batches: {e}", exc_info=True)
+            logger.error(f"Error checking batch completion for {batch_id}: {e}", exc_info=True)
             return jsonify({
                 'success': False,
                 'error': str(e)
             }), 500
 
-    @app.route('/api/batches/archived/<int:archive_id>', methods=['GET'])
-    def get_archived_batch(archive_id):
-        """Get complete archived batch data"""
+    @app.route('/api/batches/<int:batch_id>/action', methods=['POST'])
+    def batch_action(batch_id):
+        """Unified endpoint for all batch state change requests"""
         try:
-            archived_batch = batch_archive_service.get_archived_batch(archive_id)
-
-            if not archived_batch:
+            data = request.get_json(force=True, silent=True)
+            if not data:
                 return jsonify({
                     'success': False,
-                    'error': f'Archived batch {archive_id} not found'
-                }), 404
-
-            return jsonify({
-                'success': True,
-                'archived_batch': archived_batch
-            })
-
+                    'error': 'No data provided'
+                }), 400
+                
+            action = data.get('action')
+            context = data.get('context', {})
+            
+            if not action:
+                return jsonify({
+                    'success': False,
+                    'error': 'Action is required'
+                }), 400
+                
+            # Log the action request
+            logger.info(f"Batch action requested: batch_id={batch_id}, action={action}, context={context}")
+            
+            # Use centralized state management
+            result = batch_service.request_state_change(batch_id, action, context)
+            
+            if result['success']:
+                return jsonify(result), 200
+            else:
+                return jsonify(result), 400
+                
         except Exception as e:
-            logger.error(f"Error getting archived batch {archive_id}: {e}", exc_info=True)
+            logger.error(f"Error performing batch action {action} on batch {batch_id}: {e}", exc_info=True)
             return jsonify({
                 'success': False,
-                'error': str(e)
-            }), 500
-
-    @app.route('/api/batches/cleanup', methods=['POST'])
-    def manual_cleanup_batches():
-        """Manually trigger cleanup of stale batches"""
-        try:
-            result = batch_cleanup_service.manual_cleanup_all_stale_batches()
-            return jsonify(result), 200 if result['success'] else 400
-
-        except Exception as e:
-            logger.error(f"Error in manual batch cleanup: {e}", exc_info=True)
-            return jsonify({
-                'success': False,
-                'error': str(e)
-            }), 500
-
-    @app.route('/api/batches/cleanup/status', methods=['GET'])
-    def get_cleanup_status():
-        """Get batch cleanup service status"""
-        try:
-            status = batch_cleanup_service.get_cleanup_status()
-            return jsonify(status), 200
-
-        except Exception as e:
-            logger.error(f"Error getting cleanup status: {e}", exc_info=True)
-            return jsonify({
                 'error': str(e)
             }), 500
 

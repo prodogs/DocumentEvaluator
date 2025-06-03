@@ -3,26 +3,619 @@ Batch Service
 
 Manages batch operations for document processing including:
 - Creating new batches with timestamps
+- Staging batches (preparing documents for LLM processing)
 - Updating batch status and progress
 - Retrieving batch information
 - Managing batch lifecycle with timing data
 """
 
 import logging
+import json
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy.sql import func
 from sqlalchemy import and_, or_
-from models import Batch, Document, Folder, Connection, Prompt
+from models import Batch, Document, Folder, Connection, Prompt, Model, LlmProvider
 from database import Session
 from services.document_encoding_service import DocumentEncodingService
+from utils.llm_config_formatter import format_llm_config_for_rag_api
 import os
+import psycopg2
+import base64
 
 logger = logging.getLogger(__name__)
 
 class BatchService:
-    """Service for managing document processing batches - LLM processing moved to KnowledgeDocuments database"""
+    # Valid batch states
+    BATCH_STATES = {
+        'SAVED': 'Saved configuration',
+        'STAGING': 'Preparing documents',
+        'STAGED': 'Ready to process',
+        'ANALYZING': 'Processing documents',
+        'PAUSED': 'Processing paused',
+        'COMPLETED': 'Processing complete',
+        'FAILED': 'Processing failed',
+        'FAILED_STAGING': 'Staging failed'
+    }
+    
+    # Valid state transitions
+    VALID_TRANSITIONS = {
+        'SAVED': ['STAGING'],
+        'STAGING': ['STAGED', 'FAILED_STAGING'],
+        'STAGED': ['ANALYZING', 'STAGING'],  # Can restage
+        'ANALYZING': ['COMPLETED', 'FAILED', 'PAUSED'],
+        'PAUSED': ['ANALYZING', 'FAILED'],
+        'COMPLETED': ['STAGING'],  # Can restage for rerun
+        'FAILED': ['STAGING'],  # Can retry
+        'FAILED_STAGING': ['STAGING']  # Can retry staging
+    }
+    
+    # Actions that can be requested
+    BATCH_ACTIONS = {
+        'stage': 'Prepare batch for processing',
+        'run': 'Start processing batch',
+        'pause': 'Pause active processing',
+        'resume': 'Resume paused processing',
+        'reset': 'Reset batch to saved state',
+        'cancel': 'Cancel active processing',
+        'restage': 'Restage for reprocessing'
+    }
+    """Unified service for managing document processing batches including staging"""
 
+    def __init__(self):
+        logger.info("BatchService initialized - ready for unified batch and staging operations")
+    
+    def request_state_change(self, batch_id: int, action: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Central method for all batch state change requests.
+        
+        This is the ONLY method that should be used to change batch state.
+        It validates the current state, checks if the transition is allowed,
+        performs the transition if valid, and returns the result.
+        
+        Args:
+            batch_id: The batch to modify
+            action: The requested action (stage, run, pause, resume, reset, cancel, restage)
+            context: Additional context for the action (e.g., user_id, reason)
+            
+        Returns:
+            Dict with success, message, current_state, and other relevant data
+        """
+        if action not in self.BATCH_ACTIONS:
+            return {
+                'success': False,
+                'error': f'Invalid action: {action}',
+                'valid_actions': list(self.BATCH_ACTIONS.keys())
+            }
+        
+        session = Session()
+        try:
+            # Lock the batch row to prevent concurrent modifications
+            batch = session.query(Batch).filter(Batch.id == batch_id).with_for_update().first()
+            if not batch:
+                return {
+                    'success': False,
+                    'error': f'Batch {batch_id} not found'
+                }
+            
+            current_state = batch.status
+            logger.info(f"📋 State change requested for batch {batch_id}: {current_state} -> {action}")
+            
+            # Check if action is valid for current state
+            can_proceed, reason = self._can_perform_action(batch, action, session)
+            if not can_proceed:
+                return {
+                    'success': False,
+                    'error': reason,
+                    'current_state': current_state,
+                    'batch_id': batch_id
+                }
+            
+            # Perform the action
+            result = self._perform_action(batch, action, context, session)
+            
+            # Log the state change
+            if result.get('success'):
+                new_state = batch.status
+                logger.info(f"✅ Batch {batch_id} state changed: {current_state} -> {new_state} via {action}")
+                result['previous_state'] = current_state
+                result['new_state'] = new_state
+            
+            session.commit()
+            return result
+            
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error in state change for batch {batch_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': f'Internal error: {str(e)}',
+                'batch_id': batch_id
+            }
+        finally:
+            session.close()
+    
+    def _can_perform_action(self, batch: Batch, action: str, session) -> Tuple[bool, str]:
+        """Check if an action can be performed on a batch in its current state"""
+        current_state = batch.status
+        
+        # Map actions to required states
+        action_requirements = {
+            'stage': ['SAVED', 'FAILED_STAGING'],
+            'run': ['STAGED'],
+            'pause': ['ANALYZING'],
+            'resume': ['PAUSED'],
+            'reset': ['SAVED', 'FAILED', 'FAILED_STAGING'],
+            'cancel': ['ANALYZING', 'PAUSED', 'STAGING'],
+            'restage': ['COMPLETED', 'FAILED', 'STAGED']
+        }
+        
+        # Check if current state allows this action
+        allowed_states = action_requirements.get(action, [])
+        if current_state not in allowed_states:
+            return False, f"Cannot {action} batch in {current_state} state. Allowed states: {', '.join(allowed_states)}"
+        
+        # Additional checks for specific actions
+        if action == 'pause' and current_state == 'ANALYZING':
+            # Check if there are actually active tasks to pause
+            active_tasks = self._count_active_tasks(batch.id)
+            if active_tasks == 0:
+                return False, "No active tasks to pause"
+        
+        if action == 'reset' and current_state in ['ANALYZING', 'STAGING']:
+            # Don't allow reset while actively processing
+            return False, f"Cannot reset batch while {current_state}. Please wait for completion or use cancel action."
+        
+        return True, ""
+    
+    def _perform_action(self, batch: Batch, action: str, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Perform the requested action on the batch"""
+        
+        # Map actions to methods
+        action_methods = {
+            'stage': self._action_stage,
+            'run': self._action_run,
+            'pause': self._action_pause,
+            'resume': self._action_resume,
+            'reset': self._action_reset,
+            'cancel': self._action_cancel,
+            'restage': self._action_restage
+        }
+        
+        method = action_methods.get(action)
+        if not method:
+            return {
+                'success': False,
+                'error': f'Action {action} not implemented'
+            }
+        
+        return method(batch, context, session)
+    
+    def _count_active_tasks(self, batch_id: int) -> int:
+        """Count active tasks for a batch in KnowledgeDocuments"""
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            kb_cursor.execute("""
+                SELECT COUNT(*) 
+                FROM llm_responses 
+                WHERE batch_id = %s 
+                AND status IN ('QUEUED', 'P')
+            """, (batch_id,))
+            
+            count = kb_cursor.fetchone()[0]
+            kb_cursor.close()
+            kb_conn.close()
+            return count
+        except Exception as e:
+            logger.error(f"Error counting active tasks: {e}")
+            return 0
+
+    def _action_stage(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle stage action - prepare documents"""
+        batch.status = 'STAGING'
+        session.flush()
+        
+        # Get connection and prompt IDs from batch config
+        connection_ids = batch.config_snapshot.get('connection_ids', [])
+        prompt_ids = batch.config_snapshot.get('prompt_ids', [])
+        
+        # Use existing staging logic
+        encoding_service = DocumentEncodingService()
+        staging_result = self._perform_staging(
+            session, 
+            batch.id, 
+            batch.folder_ids or [], 
+            connection_ids, 
+            prompt_ids, 
+            encoding_service
+        )
+        
+        if staging_result['success']:
+            batch.status = 'STAGED'
+            return {
+                'success': True,
+                'message': f'Batch staged successfully',
+                'total_documents': staging_result['total_documents'],
+                'total_responses': staging_result['total_responses']
+            }
+        else:
+            batch.status = 'FAILED_STAGING'
+            return {
+                'success': False,
+                'error': staging_result.get('error', 'Staging failed')
+            }
+    
+    def _action_run(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle run action - start processing"""
+        batch.status = 'ANALYZING'
+        batch.started_at = func.now()
+        session.flush()
+        
+        # The actual processing will be picked up by the queue processor
+        return {
+            'success': True,
+            'message': 'Batch processing started',
+            'batch_id': batch.id
+        }
+    
+    def _action_pause(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle pause action"""
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Update QUEUED responses to PAUSED
+            kb_cursor.execute("""
+                UPDATE llm_responses 
+                SET status = 'PAUSED' 
+                WHERE batch_id = %s AND status IN ('QUEUED', 'P')
+            """, (batch.id,))
+            paused_count = kb_cursor.rowcount
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            batch.status = 'PAUSED'
+            
+            return {
+                'success': True,
+                'message': f'Batch paused, {paused_count} tasks halted',
+                'paused_tasks': paused_count
+            }
+        except Exception as e:
+            logger.error(f"Error pausing batch: {e}")
+            return {
+                'success': False,
+                'error': f'Failed to pause: {str(e)}'
+            }
+    
+    def _action_resume(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle resume action"""
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Update PAUSED responses back to QUEUED
+            kb_cursor.execute("""
+                UPDATE llm_responses 
+                SET status = 'QUEUED' 
+                WHERE batch_id = %s AND status = 'PAUSED'
+            """, (batch.id,))
+            resumed_count = kb_cursor.rowcount
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            batch.status = 'ANALYZING'
+            
+            return {
+                'success': True,
+                'message': f'Batch resumed, {resumed_count} tasks requeued',
+                'resumed_tasks': resumed_count
+            }
+        except Exception as e:
+            logger.error(f"Error resuming batch: {e}")
+            return {
+                'success': False,
+                'error': f'Failed to resume: {str(e)}'
+            }
+    
+    def _action_reset(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle reset action - only allowed on non-active batches"""
+        # This should only be called if batch is in allowed state (checked by _can_perform_action)
+        
+        # Clear any LLM responses if they exist
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            kb_cursor.execute("DELETE FROM llm_responses WHERE batch_id = %s", (batch.id,))
+            deleted_count = kb_cursor.rowcount
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+        except Exception as e:
+            logger.warning(f"Error clearing LLM responses: {e}")
+            deleted_count = 0
+        
+        # Reset batch state
+        batch.status = 'SAVED'
+        batch.started_at = None
+        batch.completed_at = None
+        batch.processed_documents = 0
+        
+        # Unassign documents
+        documents = session.query(Document).filter(Document.batch_id == batch.id).all()
+        for doc in documents:
+            doc.batch_id = None
+        
+        return {
+            'success': True,
+            'message': 'Batch reset to saved state',
+            'documents_unassigned': len(documents),
+            'responses_deleted': deleted_count
+        }
+    
+    def _action_cancel(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle cancel action - stop active processing"""
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Mark all QUEUED tasks as CANCELLED
+            kb_cursor.execute("""
+                UPDATE llm_responses 
+                SET status = 'F', error_message = 'Cancelled by user' 
+                WHERE batch_id = %s AND status IN ('QUEUED', 'P')
+            """, (batch.id,))
+            cancelled_count = kb_cursor.rowcount
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            batch.status = 'FAILED'
+            batch.completed_at = func.now()
+            
+            return {
+                'success': True,
+                'message': f'Batch cancelled, {cancelled_count} tasks stopped',
+                'cancelled_tasks': cancelled_count
+            }
+        except Exception as e:
+            logger.error(f"Error cancelling batch: {e}")
+            return {
+                'success': False,
+                'error': f'Failed to cancel: {str(e)}'
+            }
+    
+    def _action_restage(self, batch: Batch, context: Optional[Dict[str, Any]], session) -> Dict[str, Any]:
+        """Handle restage action - prepare for reprocessing"""
+        # Clear existing staging data
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Delete existing llm_responses
+            kb_cursor.execute("DELETE FROM llm_responses WHERE batch_id = %s", (batch.id,))
+            kb_cursor.execute("DELETE FROM docs WHERE document_id LIKE %s", (f'batch_{batch.id}_%',))
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+        except Exception as e:
+            logger.warning(f"Error clearing existing data: {e}")
+        
+        # Reset batch timing
+        batch.started_at = None
+        batch.completed_at = None
+        batch.processed_documents = 0
+        
+        # Now stage again
+        return self._action_stage(batch, context, session)
+    
+    def handle_task_completion(self, task_id: str, result_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle task completion from queue processor
+        
+        Args:
+            task_id: The completed task ID
+            result_data: Dict containing task results including response_text, tokens, etc.
+            
+        Returns:
+            Dict with success status
+        """
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Update the llm_response with results
+            kb_cursor.execute("""
+                UPDATE llm_responses 
+                SET status = 'COMPLETED',
+                    response_text = %s,
+                    response_json = %s,
+                    input_tokens = %s,
+                    output_tokens = %s,
+                    response_time_ms = %s,
+                    overall_score = %s,
+                    completed_processing_at = NOW()
+                WHERE task_id = %s
+            """, (
+                result_data.get('response_text', ''),
+                json.dumps(result_data.get('raw_response', {})),
+                result_data.get('input_tokens', 0),
+                result_data.get('output_tokens', 0),
+                result_data.get('response_time_ms', 0),
+                result_data.get('overall_score'),
+                task_id
+            ))
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            # Check if batch is complete
+            self._check_batch_completion(result_data.get('batch_id'))
+            
+            return {'success': True}
+            
+        except Exception as e:
+            logger.error(f"Error handling task completion: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def handle_task_failure(self, task_id: Optional[str], error_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle task failure from queue processor
+        
+        Args:
+            task_id: The failed task ID (can be None if submission failed)
+            error_data: Dict containing error information
+            
+        Returns:
+            Dict with success status
+        """
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            if task_id:
+                # Update by task_id
+                kb_cursor.execute("""
+                    UPDATE llm_responses 
+                    SET status = 'FAILED',
+                        error_message = %s,
+                        completed_processing_at = NOW()
+                    WHERE task_id = %s
+                """, (error_data.get('error', 'Unknown error'), task_id))
+            else:
+                # Update by doc_id if no task_id
+                kb_cursor.execute("""
+                    UPDATE llm_responses 
+                    SET status = 'FAILED',
+                        error_message = %s,
+                        completed_processing_at = NOW()
+                    WHERE id = %s
+                """, (error_data.get('error', 'Unknown error'), error_data.get('doc_id')))
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            # Check if batch is complete
+            self._check_batch_completion(error_data.get('batch_id'))
+            
+            return {'success': True}
+            
+        except Exception as e:
+            logger.error(f"Error handling task failure: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def _check_batch_completion(self, batch_id: int):
+        """Check if all tasks for a batch are complete and update batch status"""
+        if not batch_id:
+            return
+            
+        try:
+            import psycopg2
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres", 
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Check if any tasks are still pending
+            kb_cursor.execute("""
+                SELECT COUNT(*) 
+                FROM llm_responses 
+                WHERE batch_id = %s 
+                AND status IN ('QUEUED', 'P', 'PROCESSING')
+            """, (batch_id,))
+            
+            pending_count = kb_cursor.fetchone()[0]
+            kb_cursor.close()
+            kb_conn.close()
+            
+            if pending_count == 0:
+                # All tasks complete, update batch status
+                session = Session()
+                try:
+                    batch = session.query(Batch).filter(Batch.id == batch_id).first()
+                    if batch and batch.status in ['ANALYZING', 'PROCESSING']:
+                        batch.status = 'COMPLETED'
+                        batch.completed_at = func.now()
+                        session.commit()
+                        logger.info(f"Batch {batch_id} marked as COMPLETED (was {batch.status})")
+                finally:
+                    session.close()
+                    
+        except Exception as e:
+            logger.error(f"Error checking batch completion: {e}")
+    
     def _handle_llm_response_deprecation(self, method_name: str) -> Dict[str, Any]:
         """Handle methods that depend on LlmResponse table"""
         logger.warning(f"{method_name} called but LLM processing has been moved to KnowledgeDocuments database")
@@ -95,20 +688,23 @@ class BatchService:
                     }
                     folders_data.append(folder_data)
 
-                    # Scan folder for documents at batch creation time
-                    if folder.folder_path and os.path.exists(folder.folder_path):
-                        for root, dirs, files in os.walk(folder.folder_path):
-                            for filename in files:
-                                if filename.lower().endswith(('.pdf', '.txt', '.doc', '.docx')):
-                                    filepath = os.path.join(root, filename)
-                                    documents_data.append({
-                                        'filepath': filepath,
-                                        'filename': filename,
-                                        'folder_id': folder.id,
-                                        'relative_path': os.path.relpath(filepath, folder.folder_path),
-                                        'file_size': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
-                                        'discovered_at': datetime.now().isoformat()
-                                    })
+                    # Get validated documents from preprocessing instead of scanning
+                    # This ensures only properly validated files are included
+                    validated_docs = session.query(Document).filter(
+                        Document.folder_id == folder.id,
+                        Document.valid == 'Y'  # Only include valid documents
+                    ).all()
+                    
+                    for doc in validated_docs:
+                        documents_data.append({
+                            'filepath': doc.filepath,
+                            'filename': doc.filename,
+                            'folder_id': folder.id,
+                            'relative_path': os.path.relpath(doc.filepath, folder.folder_path) if folder.folder_path else doc.filename,
+                            'file_size': doc.meta_data.get('file_size', 0) if doc.meta_data else 0,
+                            'document_id': doc.id,
+                            'discovered_at': doc.created_at.isoformat() if doc.created_at else datetime.now().isoformat()
+                        })
 
             # Create the complete snapshot
             config_snapshot = {
@@ -186,32 +782,28 @@ class BatchService:
 
             logger.info(f"🔄 STAGE 1: Preparing batch #{next_batch_number} - {batch_name}")
 
-            # STAGE 1: Scan folders and collect all files
-            all_file_paths = []
+            # STAGE 1: Get preprocessed document counts for folders
             folder_stats = {}
+            total_valid_documents = 0
 
             folders = session.query(Folder).filter(Folder.id.in_(folder_ids)).all()
             for folder in folders:
-                if not folder.folder_path or not os.path.exists(folder.folder_path):
-                    logger.warning(f"⚠️ Folder path not found: {folder.folder_path}")
-                    continue
-
-                folder_files = []
-                for root, _, files in os.walk(folder.folder_path):
-                    for filename in files:
-                        if filename.lower().endswith(('.pdf', '.txt', '.doc', '.docx', '.rtf', '.odt')):
-                            filepath = os.path.join(root, filename)
-                            folder_files.append(filepath)
-                            all_file_paths.append(filepath)
-
+                # Count valid documents from preprocessing
+                valid_doc_count = session.query(Document).filter(
+                    Document.folder_id == folder.id,
+                    Document.valid == 'Y',
+                    Document.batch_id.is_(None)
+                ).count()
+                
                 folder_stats[folder.id] = {
                     'folder_name': folder.folder_name,
                     'folder_path': folder.folder_path,
-                    'file_count': len(folder_files)
+                    'file_count': valid_doc_count
                 }
-                logger.info(f"📁 Found {len(folder_files)} documents in {folder.folder_name}")
+                total_valid_documents += valid_doc_count
+                logger.info(f"📁 Found {valid_doc_count} valid preprocessed documents in {folder.folder_name}")
 
-            logger.info(f"📄 Total documents to process: {len(all_file_paths)}")
+            logger.info(f"📄 Total valid documents to process: {total_valid_documents}")
 
             # STAGE 1: Use existing preprocessed documents instead of creating new ones
             documents_created = 0
@@ -225,9 +817,11 @@ class BatchService:
                     continue
 
                 # Get existing documents from the folder (from preprocessing)
+                # Only include valid documents that have been validated during preprocessing
                 existing_documents = session.query(Document).filter(
                     Document.folder_id == folder_id,
-                    Document.batch_id.is_(None)  # Only get documents not already assigned to a batch
+                    Document.batch_id.is_(None),  # Only get documents not already assigned to a batch
+                    Document.valid == 'Y'  # Only include valid documents
                 ).all()
 
                 if not existing_documents:
@@ -308,12 +902,12 @@ class BatchService:
             logger.info(f"🚀 Starting execution of batch #{batch.batch_number} (Status: {batch.status})")
 
             # Handle different batch statuses
-            if batch.status in ['READY', 'STAGED']:
-                # Batch has been staged but needs LLM responses created
+            if batch.status == 'READY':
+                # Batch is ready but not staged - create documents and llm_responses
                 return self._run_ready_batch(session, batch)
-            elif batch.status == 'PREPARED':
-                # Batch has LLM responses ready, start processing
-                return self._deprecated_run_batch(batch_id)
+            elif batch.status == 'STAGED':
+                # Batch has been staged - llm_responses already exist, just process them
+                return self._run_staged_batch(session, batch)
             else:
                 return {
                     'success': False,
@@ -326,6 +920,172 @@ class BatchService:
             return {'success': False, 'error': str(e)}
         finally:
             session.close()
+
+    def _run_staged_batch(self, session, batch) -> Dict[str, Any]:
+        """Handle running a batch with STAGED status - process existing llm_responses"""
+        try:
+            logger.info(f"🔄 Processing staged batch #{batch.batch_number}")
+            
+            # Update batch status to ANALYZING
+            batch.status = 'ANALYZING'
+            batch.started_at = func.now()
+            session.commit()
+            
+            # Connect to KnowledgeDocuments database to get llm_responses
+            import psycopg2
+            import json
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Get all QUEUED or PAUSED llm_responses for this batch
+            kb_cursor.execute("""
+                SELECT lr.id, lr.document_id, lr.prompt_id, lr.connection_id, 
+                       d.document_id as doc_ref_id, lr.status
+                FROM llm_responses lr
+                JOIN docs d ON lr.document_id = d.id
+                WHERE lr.batch_id = %s AND lr.status IN ('QUEUED', 'PAUSED')
+            """, (batch.id,))
+            
+            queued_responses = kb_cursor.fetchall()
+            logger.info(f"Found {len(queued_responses)} queued responses to process")
+            
+            if not queued_responses:
+                kb_cursor.close()
+                kb_conn.close()
+                
+                batch.status = 'COMPLETED'
+                batch.completed_at = func.now()
+                session.commit()
+                
+                return {
+                    'success': True,
+                    'batch_id': batch.id,
+                    'batch_number': batch.batch_number,
+                    'batch_name': batch.batch_name,
+                    'message': 'No queued responses to process',
+                    'total_responses': 0
+                }
+            
+            # Get connection details from batch config
+            connections_map = {}
+            if batch.config_snapshot and 'connections' in batch.config_snapshot:
+                for conn in batch.config_snapshot['connections']:
+                    connections_map[conn['id']] = conn
+            
+            # Get prompt details from batch config
+            prompts_map = {}
+            if batch.config_snapshot and 'prompts' in batch.config_snapshot:
+                for prompt in batch.config_snapshot['prompts']:
+                    prompts_map[prompt['id']] = prompt
+            
+            # Process each queued response
+            processed_count = 0
+            failed_count = 0
+            
+            for response in queued_responses:
+                lr_id, doc_id, prompt_id, conn_id, doc_ref_id, lr_status = response
+                
+                try:
+                    # Get connection config
+                    connection = connections_map.get(conn_id, {})
+                    
+                    # Use unified formatter for LLM config
+                    llm_config = format_llm_config_for_rag_api(connection)
+                    
+                    # Prepare prompts
+                    prompt = prompts_map.get(prompt_id, {})
+                    prompts_data = [{'prompt': prompt.get('prompt_text', '')}]
+                    
+                    # Prepare metadata
+                    meta_data = {
+                        'batch_id': batch.id,
+                        'batch_name': batch.batch_name,
+                        'llm_response_id': lr_id,
+                        **(batch.meta_data or {})
+                    }
+                    
+                    logger.info(f"📤 Sending llm_response {lr_id} (doc: {doc_id}) to RAG API")
+                    logger.info(f"   LLM Config: provider={llm_config['provider_type']}, url={llm_config['url']}, model={llm_config['model_name']}")
+                    
+                    # Send to RAG API
+                    form_data = {
+                        'doc_id': str(doc_id),
+                        'prompts': json.dumps(prompts_data),
+                        'llm_provider': json.dumps(llm_config),
+                        'meta_data': json.dumps(meta_data)
+                    }
+                    
+                    import requests
+                    response_raw = requests.post(
+                        "http://localhost:7001/analyze_document_with_llm",
+                        data=form_data,
+                        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                        timeout=120
+                    )
+                    
+                    if response_raw.status_code < 400:
+                        # Update llm_response status to PROCESSING
+                        kb_cursor.execute("""
+                            UPDATE llm_responses 
+                            SET status = 'PROCESSING', 
+                                task_id = %s,
+                                started_processing_at = NOW()
+                            WHERE id = %s
+                        """, (
+                            response_raw.json().get('task_id', ''),
+                            lr_id
+                        ))
+                        kb_conn.commit()
+                        processed_count += 1
+                        logger.info(f"✅ Successfully submitted llm_response {lr_id} for processing")
+                    else:
+                        failed_count += 1
+                        logger.error(f"❌ Failed to submit llm_response {lr_id}: HTTP {response_raw.status_code}")
+                        
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"❌ Error processing llm_response {lr_id}: {e}")
+            
+            kb_cursor.close()
+            kb_conn.close()
+            
+            # Update batch status
+            if processed_count > 0:
+                batch.status = 'ANALYZING'
+                message = f"Submitted {processed_count} responses for processing"
+            else:
+                batch.status = 'FAILED'
+                message = f"Failed to submit any responses for processing"
+            
+            session.commit()
+            
+            logger.info(f"✅ Batch processing initiated: {processed_count} successful, {failed_count} failed")
+            
+            return {
+                'success': True,
+                'batch_id': batch.id,
+                'batch_number': batch.batch_number,
+                'batch_name': batch.batch_name,
+                'message': message,
+                'processed_count': processed_count,
+                'failed_count': failed_count,
+                'total_responses': len(queued_responses)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error in _run_staged_batch: {e}", exc_info=True)
+            batch.status = 'FAILED'
+            session.commit()
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def _run_ready_batch(self, session, batch) -> Dict[str, Any]:
         """Handle running a batch with READY status - create LLM responses and start processing"""
@@ -350,30 +1110,8 @@ class BatchService:
                 }
 
             # Get connections and prompts from config snapshot
-            # HOTFIX: Get fresh connection data from DB to avoid corrupted snapshot data
-            from sqlalchemy import text
-            fresh_connections_result = session.execute(text("""
-                SELECT c.*, p.provider_type, m.display_name as model_name
-                FROM connections c
-                LEFT JOIN llm_providers p ON c.provider_id = p.id
-                LEFT JOIN models m ON c.model_id = m.id
-                WHERE c.is_active = true
-            """))
-            
-            fresh_connections_data = []
-            for row in fresh_connections_result:
-                fresh_connections_data.append({
-                    'id': row.id,
-                    'name': row.name,
-                    'base_url': row.base_url,
-                    'model_name': row.model_name or 'default',
-                    'api_key': row.api_key,
-                    'provider_type': row.provider_type,
-                    'port_no': row.port_no,
-                    'is_active': row.is_active
-                })
-            
-            connections = fresh_connections_data  # Use fresh data instead of snapshot
+            # Use the snapshot data to ensure consistency - connections and prompts should NOT change after batch creation
+            connections = batch.config_snapshot.get('connections', [])
             prompts = batch.config_snapshot.get('prompts', [])
 
             logger.info(f"✅ Batch #{batch.batch_number} marked as ANALYZING")
@@ -394,14 +1132,8 @@ class BatchService:
                 for connection in connections:
                     for prompt in prompts:
                         try:
-                            # Prepare LLM provider data from connection
-                            llm_provider_data = {
-                                'provider_type': connection.get('provider_type', 'ollama'),
-                                'url': connection.get('base_url', 'http://localhost'),
-                                'model_name': connection.get('model_name', 'default'),
-                                'api_key': connection.get('api_key'),
-                                'port_no': connection.get('port_no', 11434)
-                            }
+                            # Use unified formatter for LLM config
+                            llm_config = format_llm_config_for_rag_api(connection)
 
                             # Prepare prompts data
                             prompts_data = [{'prompt': prompt.get('prompt_text', '')}]
@@ -556,47 +1288,25 @@ class BatchService:
                                     conn.close()
 
                                 # Now send to RAG API with the doc_id
-                                # IMPORTANT: Use exact configuration from database - NEVER modify values
-                                base_url = connection.get('base_url', '')
-                                port_no = connection.get('port_no')
-                                
-                                logger.info(f"🔍 Connection data: {connection}")
-                                logger.info(f"🔍 LLM provider data: {llm_provider_data}")
-                                logger.info(f"🔍 Base URL from DB (exact): '{base_url}'")
-                                logger.info(f"🔍 Port from DB (exact): {port_no}")
+                                # We already have llm_config from line 568
+                                logger.info(f"🔧 Sending to RAG API with config: {llm_config}")
 
-                                # Ensure base_url is not empty
-                                if not base_url:
-                                    logger.error(f"❌ Empty base_url for connection {connection.get('id')}")
-                                    failed_count += 1
-                                    continue
-
-                                # Use exact database values without modification
-                                logger.info(f"🔗 Using exact LLM provider configuration from database")
-
-                                # Prepare LLM provider config for RAG service using exact DB values
-                                llm_config = {
-                                    'provider_type': llm_provider_data.get('provider_type'),
-                                    'base_url': base_url,  # Use exact base_url from database
-                                    'port_no': port_no,    # Use exact port_no from database
-                                    'model_name': llm_provider_data.get('model_name'),
-                                    'api_key': llm_provider_data.get('api_key')
-                                }
-
-                                logger.info(f"🔧 LLM Config being sent: {llm_config}")
-
+                                # Prepare form data for RAG API (expects form-encoded with JSON strings)
                                 form_data = {
-                                    'doc_id': str(doc_id),
-                                    'prompts': json.dumps(prompts_data),
-                                    'llm_provider': json.dumps(llm_config),
-                                    'meta_data': json.dumps(meta_data)
+                                    'doc_id': str(doc_id),  # Convert to string as required by API
+                                    'prompts': json.dumps(prompts_data),  # JSON string as required
+                                    'llm_provider': json.dumps(llm_config),  # JSON string as required
+                                    'meta_data': json.dumps(meta_data) if meta_data else None  # Optional field
                                 }
 
-                                # Send to RAG API
+                                # Remove None values
+                                form_data = {k: v for k, v in form_data.items() if v is not None}
+
+                                # Send to RAG API as form data
                                 import requests
                                 response_raw = requests.post(
                                     "http://localhost:7001/analyze_document_with_llm",
-                                    data=form_data,
+                                    data=form_data,  # Use data for form encoding
                                     headers={'Content-Type': 'application/x-www-form-urlencoded'},
                                     timeout=120
                                 )
@@ -720,152 +1430,7 @@ class BatchService:
             logger.error(f"❌ Error running ready batch {batch.id}: {e}", exc_info=True)
             raise
 
-    def _deprecated_run_batch(self, batch_id: int) -> Dict[str, Any]:
-        """
-        STAGE 2: Start execution of a prepared batch
-        - Changes status from PREPARED to PROCESSING
-        - Sets started_at timestamp
-        - Initiates LLM processing for all prepared responses
 
-        Args:
-            batch_id (int): ID of the batch to run
-
-        Returns:
-            Dict[str, Any]: Execution results and status
-        """
-        session = Session()
-        encoding_service = DocumentEncodingService()
-
-        try:
-            # Get the batch
-            batch = session.query(Batch).filter(Batch.id == batch_id).first()
-            if not batch:
-                return {'success': False, 'error': f'Batch {batch_id} not found'}
-
-            # Allow running from PREPARED (legacy) or STAGED (new staging workflow)
-            if batch.status not in ['PREPARED', 'STAGED']:
-                return {'success': False, 'error': f'Batch {batch_id} is not in PREPARED or STAGED status (current: {batch.status})'}
-
-            logger.info(f"🚀 STAGE 2: Starting execution of batch #{batch.batch_number}")
-
-            # Update batch status to ANALYZING (new) or PROCESSING (legacy)
-            batch.status = 'ANALYZING' if batch.status == 'STAGED' else 'PROCESSING'
-            batch.started_at = func.now()
-
-            # Get all documents in this batch
-            documents = session.query(Document).filter(Document.batch_id == batch_id).all()
-
-            # Get all LLM responses that need processing
-            responses_to_process = session.query(LlmResponse).join(Document).filter(
-                Document.batch_id == batch_id,
-                LlmResponse.status == 'N'  # Not started
-            ).all()
-
-            logger.info(f"📄 Found {len(documents)} documents with {len(responses_to_process)} responses to process")
-
-            # Start processing responses (similar to existing process_folder logic)
-            from api.document_routes import analyze_document_with_llm
-            import asyncio
-            import threading
-
-            processed_count = 0
-            failed_count = 0
-
-            for response in responses_to_process:
-                try:
-                    # Get the document
-                    document = session.query(Document).filter(Document.id == response.document_id).first()
-                    if not document:
-                        logger.error(f"❌ Document {response.document_id} not found for response {response.id}")
-                        continue
-
-                    # Prepare document data for LLM using encoded content
-                    llm_document_data = encoding_service.prepare_document_for_llm(document, session)
-                    if not llm_document_data:
-                        logger.error(f"❌ Failed to prepare document {document.id} for LLM")
-                        response.status = 'F'
-                        response.error_message = 'Failed to prepare document data'
-                        failed_count += 1
-                        continue
-
-                    # Get prompt and connection
-                    prompt = session.query(Prompt).filter(Prompt.id == response.prompt_id).first()
-
-                    # Get connection with provider info
-                    from sqlalchemy import text
-                    connection_result = session.execute(text("""
-                        SELECT c.*, p.provider_type, m.display_name as model_name
-                        FROM connections c
-                        LEFT JOIN llm_providers p ON c.provider_id = p.id
-                        LEFT JOIN models m ON c.model_id = m.id
-                        WHERE c.id = :connection_id
-                    """), {"connection_id": response.connection_id})
-
-                    connection_row = connection_result.fetchone()
-
-                    if not prompt or not connection_row:
-                        logger.error(f"❌ Missing prompt or connection for response {response.id}")
-                        response.status = 'F'
-                        response.error_message = 'Missing prompt or connection'
-                        failed_count += 1
-                        continue
-
-                    # Prepare metadata for LLM (merge batch and document metadata)
-                    combined_meta_data = batch.meta_data.copy() if batch.meta_data else {}
-                    if 'document_meta' not in combined_meta_data:
-                        combined_meta_data['document_meta'] = {}
-                    combined_meta_data['document_meta'].update(document.meta_data)
-
-                    # Update response status to processing
-                    response.status = 'P'
-                    response.started_processing_at = func.now()
-                    session.commit()
-
-                    # Call LLM service (this will be async in real implementation)
-                    logger.info(f"🔄 Processing document {document.filename} with {connection_row.name}")
-
-                    # For now, just mark as ready for processing
-                    # The actual LLM processing will be handled by the existing background service
-                    response.status = 'R'  # Ready for processing
-                    processed_count += 1
-
-                except Exception as e:
-                    logger.error(f"❌ Error processing response {response.id}: {e}")
-                    response.status = 'F'
-                    response.error_message = str(e)
-                    failed_count += 1
-
-            session.commit()
-
-            logger.info(f"✅ STAGE 2 COMPLETE: Batch #{batch.batch_number} execution started")
-            logger.info(f"   🔄 Responses queued for processing: {processed_count}")
-            logger.info(f"   ❌ Failed responses: {failed_count}")
-
-            return {
-                'success': True,
-                'batch_id': batch_id,
-                'batch_number': batch.batch_number,
-                'batch_name': batch.batch_name,
-                'status': batch.status,
-                'execution_results': {
-                    'total_documents': len(documents),
-                    'total_responses': len(responses_to_process),
-                    'queued_for_processing': processed_count,
-                    'failed_to_queue': failed_count
-                }
-            }
-
-        except Exception as e:
-            session.rollback()
-            logger.error(f"❌ Error in STAGE 2 batch execution: {e}", exc_info=True)
-            return {'success': False, 'error': str(e)}
-        finally:
-            session.close()
-
-    def restage_and_rerun_batch(self, batch_id: int) -> Dict[str, Any]:
-        """DEPRECATED: Use rerun_batch instead - restage_and_rerun is redundant"""
-        logger.warning("restage_and_rerun_batch is deprecated. Use rerun_batch instead.")
-        return self.rerun_batch(batch_id)
 
     def rerun_batch(self, batch_id: int) -> Dict[str, Any]:
         """
@@ -1053,13 +1618,30 @@ class BatchService:
                     # Get connection config safely
                     connection_config = connection.connection_config or {}
                     
+                    # Get model and provider details for LLM config
+                    model_name = 'default'
+                    provider_type = 'ollama'
+                    
+                    if connection.model_id:
+                        model = session.query(Model).filter_by(id=connection.model_id).first()
+                        if model:
+                            model_name = model.display_name
+                    
+                    if connection.provider_id:
+                        provider = session.query(LlmProvider).filter_by(id=connection.provider_id).first()
+                        if provider:
+                            provider_type = provider.provider_type
+                    
                     conn_details = {
                         'id': connection.id,
                         'name': connection.name,
                         'provider_id': connection.provider_id,
                         'model_id': connection.model_id,
+                        'model_name': model_name,
+                        'provider_type': provider_type,
                         'api_key': connection.api_key,
                         'base_url': connection.base_url,
+                        'port_no': connection.port_no,
                         'temperature': connection_config.get('temperature'),
                         'max_tokens': connection_config.get('max_tokens')
                     }
@@ -1117,167 +1699,6 @@ class BatchService:
                 'error': str(e),
                 'batch_id': batch_id
             }
-
-    def _deprecated_rerun_batch(self, batch_id: int) -> Dict[str, Any]:
-        """
-        Rerun analysis for a completed batch
-        - Validates batch is in COMPLETED status
-        - Resets all LLM responses to 'N' (Not started)
-        - Clears response data and timing fields
-        - Updates batch status and timing
-        - Initiates LLM processing for all reset responses
-
-        Args:
-            batch_id (int): ID of the batch to rerun
-
-        Returns:
-            Dict[str, Any]: Execution results and status
-        """
-        session = Session()
-
-        try:
-            # Get the batch
-            batch = session.query(Batch).filter(Batch.id == batch_id).first()
-            if not batch:
-                return {'success': False, 'error': f'Batch {batch_id} not found'}
-
-            # Only allow rerunning completed batches
-            if batch.status != 'COMPLETED':
-                return {'success': False, 'error': f'Batch {batch_id} is not completed (current: {batch.status}). Only completed batches can be rerun.'}
-
-            logger.info(f"🔄 RERUN: Starting rerun of completed batch #{batch.batch_number}")
-
-            # Reset all LLM responses for this batch
-            responses_to_reset = session.query(LlmResponse).join(Document).filter(
-                Document.batch_id == batch_id
-            ).all()
-
-            reset_count = 0
-            for response in responses_to_reset:
-                # Reset response to initial state
-                response.status = 'N'  # Not started
-                response.started_processing_at = None
-                response.completed_processing_at = None
-                response.response_json = None
-                response.response_text = None
-                response.response_time_ms = None
-                response.error_message = None
-                response.overall_score = None
-                response.input_tokens = None
-                response.output_tokens = None
-                response.task_id = None
-                reset_count += 1
-
-            # Reset batch status and timing
-            batch.status = 'ANALYZING'
-            batch.started_at = func.now()
-            batch.completed_at = None
-            batch.processed_documents = 0
-
-            session.commit()
-
-            logger.info(f"✅ RERUN RESET: Reset {reset_count} LLM responses for batch #{batch.batch_number}")
-
-            # Now run the batch using existing logic
-            # Get all documents in this batch
-            documents = session.query(Document).filter(Document.batch_id == batch_id).all()
-
-            # Get all LLM responses that need processing (should be all of them now)
-            responses_to_process = session.query(LlmResponse).join(Document).filter(
-                Document.batch_id == batch_id,
-                LlmResponse.status == 'N'  # Not started
-            ).all()
-
-            logger.info(f"🚀 RERUN PROCESSING: Starting processing of {len(responses_to_process)} responses")
-
-            processed_count = 0
-            failed_count = 0
-
-            for response in responses_to_process:
-                try:
-                    # Get document
-                    document = session.query(Document).filter(Document.id == response.document_id).first()
-                    if not document:
-                        logger.error(f"❌ Document not found for response {response.id}")
-                        response.status = 'F'
-                        response.error_message = 'Document not found'
-                        failed_count += 1
-                        continue
-
-                    # Get prompt and connection
-                    prompt = session.query(Prompt).filter(Prompt.id == response.prompt_id).first()
-
-                    # Get connection with provider info
-                    from sqlalchemy import text
-                    connection_result = session.execute(text("""
-                        SELECT c.*, p.provider_type, m.display_name as model_name
-                        FROM connections c
-                        LEFT JOIN llm_providers p ON c.provider_id = p.id
-                        LEFT JOIN models m ON c.model_id = m.id
-                        WHERE c.id = :connection_id
-                    """), {"connection_id": response.connection_id})
-
-                    connection_row = connection_result.fetchone()
-
-                    if not prompt or not connection_row:
-                        logger.error(f"❌ Missing prompt or connection for response {response.id}")
-                        response.status = 'F'
-                        response.error_message = 'Missing prompt or connection'
-                        failed_count += 1
-                        continue
-
-                    # Prepare metadata for LLM (merge batch and document metadata)
-                    combined_meta_data = batch.meta_data.copy() if batch.meta_data else {}
-                    if 'document_meta' not in combined_meta_data:
-                        combined_meta_data['document_meta'] = {}
-                    combined_meta_data['document_meta'].update(document.meta_data)
-
-                    # Update response status to processing
-                    response.status = 'P'
-                    response.started_processing_at = func.now()
-                    session.commit()
-
-                    # Call LLM service (this will be async in real implementation)
-                    logger.info(f"🔄 Reprocessing document {document.filename} with {connection_row.name}")
-
-                    # For now, just mark as ready for processing
-                    # The actual LLM processing will be handled by the existing background service
-                    response.status = 'R'  # Ready for processing
-                    processed_count += 1
-
-                except Exception as e:
-                    logger.error(f"❌ Error processing response {response.id}: {e}")
-                    response.status = 'F'
-                    response.error_message = str(e)
-                    failed_count += 1
-
-            session.commit()
-
-            logger.info(f"✅ RERUN COMPLETE: Batch #{batch.batch_number} rerun started")
-            logger.info(f"   🔄 Responses queued for processing: {processed_count}")
-            logger.info(f"   ❌ Failed responses: {failed_count}")
-
-            return {
-                'success': True,
-                'batch_id': batch_id,
-                'batch_number': batch.batch_number,
-                'batch_name': batch.batch_name,
-                'status': batch.status,
-                'rerun_results': {
-                    'total_documents': len(documents),
-                    'total_responses_reset': reset_count,
-                    'total_responses': len(responses_to_process),
-                    'queued_for_processing': processed_count,
-                    'failed_to_queue': failed_count
-                }
-            }
-
-        except Exception as e:
-            session.rollback()
-            logger.error(f"❌ Error in batch rerun: {e}", exc_info=True)
-            return {'success': False, 'error': str(e)}
-        finally:
-            session.close()
 
     def create_batch(self, folder_path: str, batch_name: Optional[str] = None, description: Optional[str] = None, meta_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -1671,8 +2092,36 @@ class BatchService:
             if not batch:
                 return {'success': False, 'error': f'Batch {batch_id} not found'}
 
-            if batch.status not in ['P', 'ANALYZING']:
-                return {'success': False, 'error': f'Batch {batch_id} is not currently processing (status: {batch.status}). Can only pause ANALYZING or PROCESSING batches.'}
+            if batch.status not in ['ANALYZING', 'PROCESSING', 'STAGED']:
+                return {'success': False, 'error': f'Batch {batch_id} is not currently processing (status: {batch.status}). Can only pause ANALYZING, PROCESSING, or STAGED batches.'}
+
+            # Update llm_responses status in KnowledgeDocuments database
+            try:
+                import psycopg2
+                kb_conn = psycopg2.connect(
+                    host="studio.local",
+                    database="KnowledgeDocuments",
+                    user="postgres",
+                    password="prodogs03",
+                    port=5432
+                )
+                kb_cursor = kb_conn.cursor()
+                
+                # Update PROCESSING responses to PAUSED
+                kb_cursor.execute("""
+                    UPDATE llm_responses 
+                    SET status = 'PAUSED' 
+                    WHERE batch_id = %s AND status = 'PROCESSING'
+                """, (batch_id,))
+                paused_count = kb_cursor.rowcount
+                
+                kb_conn.commit()
+                kb_cursor.close()
+                kb_conn.close()
+                
+                logger.info(f"Updated {paused_count} llm_responses to PAUSED status")
+            except Exception as e:
+                logger.error(f"Error updating llm_response statuses: {e}")
 
             batch.status = 'PAUSED'  # Paused
             session.commit()
@@ -1708,19 +2157,45 @@ class BatchService:
             if not batch:
                 return {'success': False, 'error': f'Batch {batch_id} not found'}
 
-            # Allow resuming PAUSED or ANALYZING batches (ANALYZING might be stuck)
-            if batch.status not in ['PAUSED', 'ANALYZING']:
-                return {'success': False, 'error': f'Batch {batch_id} cannot be resumed (status: {batch.status}). Can only resume PAUSED or ANALYZING batches.'}
+            # Allow resuming PAUSED, ANALYZING, or STAGED batches
+            if batch.status not in ['PAUSED', 'ANALYZING', 'STAGED']:
+                return {'success': False, 'error': f'Batch {batch_id} cannot be resumed (status: {batch.status}). Can only resume PAUSED, ANALYZING, or STAGED batches.'}
 
             logger.info(f"🔄 Resuming batch {batch_id} (#{batch.batch_number} - '{batch.batch_name}') from status {batch.status}")
 
-            # Update batch status to analyzing
-            batch.status = 'ANALYZING'
-            batch.started_at = func.now()  # Update start time
-            session.commit()
-
-            # Now actually process the documents using the new RAG API approach
-            result = self._process_batch_with_rag_api(session, batch)
+            # Determine how to process based on whether batch has been staged
+            if batch.status == 'STAGED':
+                # Batch has been staged - use _run_staged_batch to process existing llm_responses
+                result = self._run_staged_batch(session, batch)
+            else:
+                # For PAUSED/ANALYZING batches, check if llm_responses exist
+                import psycopg2
+                kb_conn = psycopg2.connect(
+                    host="studio.local",
+                    database="KnowledgeDocuments",
+                    user="postgres",
+                    password="prodogs03",
+                    port=5432
+                )
+                kb_cursor = kb_conn.cursor()
+                
+                # Check if llm_responses exist for this batch
+                kb_cursor.execute("SELECT COUNT(*) FROM llm_responses WHERE batch_id = %s", (batch.id,))
+                llm_response_count = kb_cursor.fetchone()[0]
+                kb_cursor.close()
+                kb_conn.close()
+                
+                if llm_response_count > 0:
+                    # llm_responses exist - process them without creating new ones
+                    batch.status = 'STAGED'  # Set to STAGED since responses exist
+                    session.commit()
+                    result = self._run_staged_batch(session, batch)
+                else:
+                    # No llm_responses - need to create them
+                    batch.status = 'ANALYZING'
+                    batch.started_at = func.now()
+                    session.commit()
+                    result = self._process_batch_with_rag_api(session, batch)
 
             if result['success']:
                 logger.info(f"✅ Batch {batch_id} resumed and processing initiated successfully")
@@ -1772,6 +2247,47 @@ class BatchService:
                 return {
                     'success': False,
                     'error': f'Batch {batch_id} is completed. Use "Restage & Rerun" instead of reset for completed batches.'
+                }
+            
+            # Don't allow resetting actively processing batches
+            if batch.status in ['PROCESSING', 'ANALYZING']:
+                # Check if there are active tasks in KnowledgeDocuments
+                import psycopg2
+                try:
+                    kb_conn = psycopg2.connect(
+                        host="studio.local",
+                        database="KnowledgeDocuments",
+                        user="postgres", 
+                        password="prodogs03",
+                        port=5432
+                    )
+                    kb_cursor = kb_conn.cursor()
+                    
+                    # Check for any QUEUED or in-progress tasks
+                    kb_cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM llm_responses 
+                        WHERE batch_id = %s 
+                        AND status IN ('QUEUED', 'P')
+                    """, (batch_id,))
+                    
+                    active_count = kb_cursor.fetchone()[0]
+                    kb_cursor.close()
+                    kb_conn.close()
+                    
+                    if active_count > 0:
+                        return {
+                            'success': False,
+                            'error': f'Batch {batch_id} has {active_count} active tasks still processing. Please wait for completion or pause the batch first.'
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not check active tasks: {e}")
+                
+                # Even if we can't check, warn about resetting active batch
+                return {
+                    'success': False,
+                    'error': f'Batch {batch_id} is currently {batch.status}. Please wait for processing to complete or pause the batch first.',
+                    'current_status': batch.status
                 }
 
             logger.info(f"🔄 RESET: Resetting batch {batch_id} (#{batch.batch_number} - '{batch.batch_name}') from status {batch.status} to SAVED")
@@ -1900,14 +2416,8 @@ class BatchService:
                 for connection in connections:
                     for prompt in prompts:
                         try:
-                            # Prepare LLM provider data from connection
-                            llm_provider_data = {
-                                'provider_type': connection.get('provider_type', 'ollama'),
-                                'url': connection.get('base_url', 'http://localhost'),
-                                'model_name': connection.get('model_name', 'default'),
-                                'api_key': connection.get('api_key'),
-                                'port_no': connection.get('port_no', 11434)
-                            }
+                            # Use unified formatter for LLM config
+                            llm_config = format_llm_config_for_rag_api(connection)
 
                             # Prepare prompts data
                             prompts_data = [{'prompt': prompt.get('prompt_text', '')}]
@@ -1933,7 +2443,7 @@ class BatchService:
                             form_data = {
                                 'doc_id': str(doc_identifier),  # Convert to string
                                 'prompts': json.dumps(prompts_data),  # Convert to JSON string
-                                'llm_provider': json.dumps(llm_provider_data),  # Convert to JSON string
+                                'llm_provider': json.dumps(llm_config),  # Convert to JSON string
                                 'meta_data': json.dumps(meta_data)  # Convert to JSON string
                             }
 
@@ -2268,9 +2778,9 @@ class BatchService:
             
             doc_eval_session = Session()
             
-            # Get all batches that are currently ANALYZING
+            # Get all batches that are currently ANALYZING or PROCESSING
             analyzing_batches = doc_eval_session.query(Batch).filter(
-                Batch.status == 'ANALYZING'
+                Batch.status.in_(['ANALYZING', 'PROCESSING'])
             ).all()
             
             for batch in analyzing_batches:
@@ -2437,14 +2947,28 @@ class BatchService:
                                     result_data = status_data.get('result', {})
                                     task_result = status_data.get('task_result', {})
                                     
-                                    # Handle results - could be dict or list
-                                    results_raw = status_data.get('results', {})
+                                    # Handle results - array of LLMPromptResponse objects per OpenAPI spec
+                                    results_raw = status_data.get('results', [])
                                     if isinstance(results_raw, list) and results_raw:
+                                        # Get first result for primary response
                                         results_data = results_raw[0] if isinstance(results_raw[0], dict) else {}
-                                    elif isinstance(results_raw, dict):
-                                        results_data = results_raw
+                                        # Aggregate token metrics from all results
+                                        total_input_tokens = 0
+                                        total_output_tokens = 0
+                                        total_time_taken = 0.0
+                                        for result in results_raw:
+                                            if isinstance(result, dict):
+                                                if result.get('input_tokens'):
+                                                    total_input_tokens += result.get('input_tokens', 0)
+                                                if result.get('output_tokens'):
+                                                    total_output_tokens += result.get('output_tokens', 0)
+                                                if result.get('time_taken_seconds'):
+                                                    total_time_taken += result.get('time_taken_seconds', 0)
                                     else:
                                         results_data = {}
+                                        total_input_tokens = 0
+                                        total_output_tokens = 0
+                                        total_time_taken = 0.0
                                     
                                     # Handle scoring_result - could be dict or list
                                     scoring_raw = status_data.get('scoring_result', {})
@@ -2465,6 +2989,10 @@ class BatchService:
                                     logger.info(f"   scoring_data keys: {list(scoring_data.keys()) if isinstance(scoring_data, dict) and scoring_data else 'None'}")
                                     logger.info(f"   results_raw type: {type(results_raw)} - {results_raw if not isinstance(results_raw, (dict, list)) or len(str(results_raw)) < 200 else f'{type(results_raw)} with {len(results_raw)} items'}")
                                     logger.info(f"   scoring_raw type: {type(scoring_raw)} - {scoring_raw if not isinstance(scoring_raw, (dict, list)) or len(str(scoring_raw)) < 200 else f'{type(scoring_raw)} with {len(scoring_raw)} items'}")
+                                    
+                                    # Log scoring_result details specifically
+                                    if scoring_data:
+                                        logger.info(f"   📊 scoring_result details: overall_score={scoring_data.get('overall_score')}, confidence={scoring_data.get('confidence')}, provider={scoring_data.get('provider_name')}")
                                     
                                     # Try to get response_text from multiple possible locations
                                     response_text = (
@@ -2523,7 +3051,8 @@ class BatchService:
                                         status_data.get('rating')
                                     )
                                     
-                                    input_tokens = (
+                                    # Use aggregated token values if available from results array
+                                    input_tokens = total_input_tokens if total_input_tokens > 0 else (
                                         results_data.get('input_tokens') or
                                         results_data.get('tokens_in') or
                                         results_data.get('prompt_tokens') or
@@ -2541,7 +3070,7 @@ class BatchService:
                                         status_data.get('prompt_tokens')
                                     )
                                     
-                                    output_tokens = (
+                                    output_tokens = total_output_tokens if total_output_tokens > 0 else (
                                         results_data.get('output_tokens') or
                                         results_data.get('tokens_out') or
                                         results_data.get('completion_tokens') or
@@ -2559,7 +3088,7 @@ class BatchService:
                                         status_data.get('completion_tokens')
                                     )
                                     
-                                    time_taken = (
+                                    time_taken = total_time_taken if total_time_taken > 0 else (
                                         results_data.get('time_taken_seconds') or
                                         results_data.get('processing_time') or
                                         results_data.get('duration') or
@@ -2865,6 +3394,1004 @@ class BatchService:
         polling_thread = threading.Thread(target=poll_task, daemon=True)
         polling_thread.start()
         logger.info(f"🚀 Started background polling thread for task {task_id}")
+
+    def save_batch(self, folder_ids: List[int], connection_ids: List[int], prompt_ids: List[int],
+                   batch_name: Optional[str] = None, description: Optional[str] = None,
+                   meta_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Save batch configuration without staging (creates batch in SAVED status)"""
+        logger.info(f"save_batch called for '{batch_name}' - creating batch configuration")
+        
+        try:
+            session = Session()
+            
+            try:
+                # Get the next batch number
+                max_batch_number = session.query(func.max(Batch.batch_number)).scalar()
+                next_batch_number = (max_batch_number or 0) + 1
+
+                # Create configuration snapshot
+                config_snapshot = self._create_config_snapshot(folder_ids)
+                
+                # Add connection and prompt IDs to config
+                config_snapshot['connection_ids'] = connection_ids
+                config_snapshot['prompt_ids'] = prompt_ids
+
+                # Create the batch with SAVED status
+                batch = Batch(
+                    batch_number=next_batch_number,
+                    batch_name=batch_name,
+                    description=description or f"Saved batch with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts",
+                    folder_ids=folder_ids,
+                    meta_data=meta_data,
+                    config_snapshot=config_snapshot,
+                    status='SAVED',  # Saved but not staged
+                    total_documents=0,
+                    processed_documents=0
+                )
+
+                session.add(batch)
+                session.commit()
+
+                logger.info(f"✅ Created batch #{next_batch_number} - {batch_name} with SAVED status")
+
+                result = {
+                    'success': True,
+                    'batch_id': batch.id,
+                    'batch_number': batch.batch_number,
+                    'batch_name': batch.batch_name,
+                    'status': batch.status,
+                    'message': f'Batch #{batch.batch_number} saved successfully'
+                }
+
+                return result
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error saving batch: {e}", exc_info=True)
+                return {
+                    'success': False,
+                    'error': str(e)
+                }
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"Error in save_batch: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def stage_batch(self, folder_ids: List[int], connection_ids: List[int], prompt_ids: List[int],
+                    batch_name: Optional[str] = None, description: Optional[str] = None,
+                    meta_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create and stage a new batch (creates batch in STAGING status and prepares documents)"""
+        logger.info(f"stage_batch called for '{batch_name}' with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts")
+        
+        try:
+            session = Session()
+            
+            try:
+                # Get the next batch number
+                max_batch_number = session.query(func.max(Batch.batch_number)).scalar()
+                next_batch_number = (max_batch_number or 0) + 1
+
+                # Create configuration snapshot
+                config_snapshot = self._create_config_snapshot(folder_ids)
+                
+                # Add connection and prompt IDs to config
+                config_snapshot['connection_ids'] = connection_ids
+                config_snapshot['prompt_ids'] = prompt_ids
+
+                # Create the batch
+                batch = Batch(
+                    batch_number=next_batch_number,
+                    batch_name=batch_name,
+                    description=description or f"Staged batch with {len(folder_ids)} folders, {len(connection_ids)} connections, {len(prompt_ids)} prompts",
+                    folder_ids=folder_ids,
+                    meta_data=meta_data,
+                    config_snapshot=config_snapshot,
+                    status='STAGING',
+                    total_documents=0,
+                    processed_documents=0
+                )
+
+                session.add(batch)
+                session.commit()
+                batch_id = batch.id
+                
+                logger.info(f"Created batch #{next_batch_number} - {batch_name} with STAGING status")
+                
+                # Assign documents to the batch
+                total_assigned = 0
+                for folder_id in folder_ids:
+                    # Get unassigned documents from this folder
+                    unassigned_docs = session.query(Document).filter(
+                        Document.folder_id == folder_id,
+                        Document.batch_id.is_(None),
+                        Document.valid == 'Y'
+                    ).all()
+
+                    # Assign these documents to the batch
+                    for doc in unassigned_docs:
+                        doc.batch_id = batch_id
+                        total_assigned += 1
+
+                    logger.info(f"Assigned {len(unassigned_docs)} documents from folder {folder_id} to batch {batch_id}")
+
+                # Update batch total_documents count
+                batch.total_documents = total_assigned
+                session.commit()
+                
+                # Perform actual staging to KnowledgeDocuments database
+                encoding_service = DocumentEncodingService()
+                staging_result = self._perform_staging(session, batch_id, folder_ids, connection_ids, prompt_ids, encoding_service)
+                
+                if staging_result['success']:
+                    # Update batch status to STAGED
+                    batch.status = 'STAGED'
+                    session.commit()
+                    
+                    logger.info(f"Successfully staged batch {batch_id}: {staging_result['total_documents']} documents, {staging_result['total_responses']} responses")
+                    
+                    return {
+                        'success': True,
+                        'batch_id': batch_id,
+                        'batch_number': next_batch_number,
+                        'batch_name': batch_name,
+                        'status': 'STAGED',
+                        'total_documents': staging_result['total_documents'],
+                        'total_responses': staging_result['total_responses'],
+                        'message': f'Batch #{next_batch_number} staged successfully with {staging_result["total_documents"]} documents'
+                    }
+                else:
+                    # Update batch status to FAILED_STAGING
+                    batch.status = 'FAILED_STAGING'
+                    session.commit()
+                    
+                    logger.error(f"Staging failed for batch {batch_id}: {staging_result.get('error', 'Unknown error')}")
+                    
+                    return {
+                        'success': False,
+                        'batch_id': batch_id,
+                        'batch_number': next_batch_number,
+                        'status': 'FAILED_STAGING',
+                        'error': staging_result.get('error', 'Staging failed'),
+                        'message': f'Batch #{next_batch_number} staging failed'
+                    }
+                    
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error in stage_batch: {e}", exc_info=True)
+                return {
+                    'success': False,
+                    'error': str(e),
+                    'message': 'Failed to stage batch'
+                }
+            finally:
+                session.close()
+                
+        except Exception as e:
+            logger.error(f"Error in stage_batch: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'message': 'Failed to stage batch'
+            }
+
+    def restage_batch(self, batch_id: int) -> Dict[str, Any]:
+        """Restage an existing batch (prepare documents and update batch status)"""
+        logger.info(f"restage_batch called for batch {batch_id}")
+
+        try:
+            session = Session()
+
+            # Get the batch
+            batch = session.query(Batch).filter(Batch.id == batch_id).first()
+            if not batch:
+                session.close()
+                return {
+                    'success': False,
+                    'error': f'Batch {batch_id} not found'
+                }
+
+            # Get documents associated with this batch
+            documents = session.query(Document).filter(Document.batch_id == batch_id).all()
+
+            # If no documents are assigned to this batch yet, assign them from the batch's folders
+            if not documents and batch.folder_ids:
+                logger.info(f"No documents assigned to batch {batch_id} yet. Assigning documents from folders: {batch.folder_ids}")
+
+                total_assigned = 0
+                documents_assigned_in_loop = 0
+                for folder_id in batch.folder_ids:
+                    # First, try to get unassigned documents from this folder
+                    unassigned_docs = session.query(Document).filter(
+                        Document.folder_id == folder_id,
+                        Document.batch_id.is_(None),
+                        Document.valid == 'Y'  # Only assign valid documents
+                    ).all()
+
+                    # If no unassigned documents, check if this is a restaging operation
+                    # and consider reassigning documents from the same folders
+                    if not unassigned_docs:
+                        logger.info(f"No unassigned documents in folder {folder_id}, checking for documents assigned to other batches")
+                        # Log current batch_id for debugging
+                        logger.info(f"Looking for documents in folder {folder_id} not assigned to batch {batch_id}")
+                        from sqlalchemy import and_, or_
+                        assigned_docs = session.query(Document).filter(
+                            Document.folder_id == folder_id,
+                            Document.batch_id.isnot(None),  # Has a batch_id
+                            Document.batch_id != batch_id,  # But not this batch
+                            Document.valid == 'Y'
+                        ).all()
+                        
+                        if assigned_docs:
+                            logger.info(f"Found {len(assigned_docs)} documents in folder {folder_id} assigned to other batches, reassigning to batch {batch_id}")
+                            # Reassign these documents to the current batch
+                            for doc in assigned_docs:
+                                doc.batch_id = batch_id
+                                total_assigned += 1
+                        else:
+                            # Check if there are ANY documents in this folder
+                            all_docs = session.query(Document).filter(
+                                Document.folder_id == folder_id
+                            ).all()
+                            logger.warning(f"No documents found in folder {folder_id} to assign. Total docs in folder: {len(all_docs)}")
+                            if all_docs:
+                                for doc in all_docs:
+                                    logger.info(f"  Doc {doc.id}: batch_id={doc.batch_id}, valid={doc.valid}")
+                    else:
+                        # Assign unassigned documents to the batch
+                        for doc in unassigned_docs:
+                            doc.batch_id = batch_id
+                            total_assigned += 1
+
+                    logger.info(f"Total documents assigned from folder {folder_id} to batch {batch_id}: {total_assigned}")
+
+                if total_assigned > 0:
+                    # Update batch total_documents count
+                    batch.total_documents = total_assigned
+                    session.commit()
+                    logger.info(f"Successfully assigned {total_assigned} documents to batch {batch_id}")
+
+                    # Re-query to get the newly assigned documents
+                    documents = session.query(Document).filter(Document.batch_id == batch_id).all()
+                else:
+                    session.close()
+                    return {
+                        'success': False,
+                        'error': f'No valid documents found in folders {batch.folder_ids} for batch {batch_id}'
+                    }
+
+            if not documents:
+                session.close()
+                return {
+                    'success': False,
+                    'error': f'No documents found for batch {batch_id}'
+                }
+
+            # Update batch status to STAGING
+            batch.status = 'STAGING'
+            batch.updated_at = func.now()
+            session.commit()
+
+            # Get connection and prompt IDs from batch config
+            connection_ids = []
+            prompt_ids = []
+            
+            if batch.config_snapshot:
+                # Extract connection IDs
+                connection_ids = batch.config_snapshot.get('connection_ids', [])
+                if not connection_ids:
+                    # Fallback: extract from connections array
+                    connections = batch.config_snapshot.get('connections', [])
+                    connection_ids = [conn['id'] for conn in connections if 'id' in conn]
+                
+                # Extract prompt IDs
+                prompt_ids = batch.config_snapshot.get('prompt_ids', [])
+                if not prompt_ids:
+                    # Fallback: extract from prompts array
+                    prompts = batch.config_snapshot.get('prompts', [])
+                    prompt_ids = [prompt['id'] for prompt in prompts if 'id' in prompt]
+            
+            logger.info(f"Extracted from config: {len(connection_ids)} connections, {len(prompt_ids)} prompts")
+
+            # Use _perform_staging to actually create llm_responses
+            encoding_service = DocumentEncodingService()
+            staging_result = self._perform_staging(
+                session, 
+                batch_id, 
+                batch.folder_ids or [], 
+                connection_ids, 
+                prompt_ids, 
+                encoding_service
+            )
+
+            # Update batch status based on staging result
+            if staging_result['success']:
+                batch.status = 'STAGED'
+                final_status = 'STAGED'
+                documents_prepared = staging_result['total_documents']
+                responses_created = staging_result['total_responses']
+                logger.info(f"Batch {batch_id} staging completed - {documents_prepared} documents, {responses_created} llm_responses created")
+            else:
+                batch.status = 'FAILED_STAGING'
+                final_status = 'FAILED_STAGING'
+                documents_prepared = 0
+                responses_created = 0
+                logger.warning(f"Batch {batch_id} staging failed: {staging_result.get('error', 'Unknown error')}")
+
+            session.commit()
+            session.close()
+
+            return {
+                'success': True,
+                'batch_id': batch_id,
+                'documents_prepared': documents_prepared,
+                'total_documents': len(documents),
+                'total_responses': responses_created,
+                'status': final_status,
+                'message': f'Batch staging completed - {documents_prepared}/{len(documents)} documents prepared, {responses_created} llm_responses created'
+            }
+
+        except Exception as e:
+            if 'session' in locals():
+                session.rollback()
+                session.close()
+            logger.error(f"Error in restage_batch for batch {batch_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'batch_id': batch_id
+            }
+
+    def _perform_staging(self, session, batch_id: int, folder_ids: List[int],
+                        connection_ids: List[int], prompt_ids: List[int],
+                        encoding_service) -> Dict[str, Any]:
+        """Perform staging - prepare documents and create entries in KnowledgeDocuments"""
+        logger.info(f"Starting staging for batch {batch_id}")
+        logger.info(f"Connection IDs: {connection_ids}")
+        logger.info(f"Prompt IDs: {prompt_ids}")
+        logger.info(f"Folder IDs: {folder_ids}")
+        
+        try:
+            # First, find and assign unassigned documents from the specified folders
+            logger.info(f"Looking for unassigned documents in folders: {folder_ids}")
+            
+            unassigned_documents = session.query(Document).filter(
+                Document.folder_id.in_(folder_ids),
+                Document.batch_id.is_(None),  # Unassigned documents
+                Document.valid == 'Y'  # Only valid documents
+            ).all()
+            
+            logger.info(f"Found {len(unassigned_documents)} unassigned documents to assign to batch {batch_id}")
+            
+            # Assign these documents to the batch
+            for doc in unassigned_documents:
+                doc.batch_id = batch_id
+                logger.info(f"Assigned document {doc.id} ({doc.filename}) to batch {batch_id}")
+            
+            session.commit()
+            
+            # Now get all documents for this batch (including newly assigned ones)
+            documents = session.query(Document).filter(
+                Document.batch_id == batch_id
+            ).all()
+            
+            logger.info(f"Found {len(documents)} total documents for batch {batch_id}")
+            
+            if not documents:
+                logger.warning(f"No documents found for batch {batch_id} after assignment")
+                return {
+                    'success': False,
+                    'error': 'No documents found for batch',
+                    'total_documents': 0,
+                    'total_responses': 0
+                }
+            
+            # Connect to KnowledgeDocuments database
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            documents_staged = 0
+            responses_created = 0
+            
+            logger.info(f"Starting to process {len(documents)} documents")
+            
+            for doc in documents:
+                logger.info(f"Processing document: {doc.filename} (ID: {doc.id}, Path: {doc.filepath})")
+                try:
+                    # Check if file exists
+                    if not os.path.exists(doc.filepath):
+                        logger.warning(f"File not found: {doc.filepath}")
+                        continue
+                    
+                    # Read and encode file
+                    with open(doc.filepath, 'rb') as f:
+                        file_content = f.read()
+                    
+                    # Encode to base64
+                    encoded_content = base64.b64encode(file_content).decode('utf-8')
+                    
+                    # Clean encoded content - ensure it's valid base64
+                    encoded_content = encoded_content.strip()
+                    if len(encoded_content) % 4 != 0:
+                        encoded_content += '=' * (4 - len(encoded_content) % 4)
+                    
+                    # Create document ID
+                    doc_id = f"batch_{batch_id}_doc_{doc.id}"
+                    
+                    # Check if document already exists
+                    kb_cursor.execute("SELECT id FROM docs WHERE document_id = %s", (doc_id,))
+                    existing = kb_cursor.fetchone()
+                    
+                    if existing:
+                        # Update existing document
+                        kb_cursor.execute("""
+                            UPDATE docs 
+                            SET content = %s, file_size = %s, created_at = NOW()
+                            WHERE document_id = %s
+                            RETURNING id
+                        """, (encoded_content, len(file_content), doc_id))
+                        kb_doc_id = kb_cursor.fetchone()[0]
+                        logger.info(f"Updated existing document in KnowledgeDocuments: {kb_doc_id}")
+                    else:
+                        # Insert new document
+                        kb_cursor.execute("""
+                            INSERT INTO docs (document_id, content, content_type, doc_type, file_size, encoding, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                            RETURNING id
+                        """, (
+                            doc_id,
+                            encoded_content,
+                            'text/plain',
+                            os.path.splitext(doc.filename)[1][1:] if '.' in doc.filename else 'txt',
+                            len(file_content),
+                            'base64'
+                        ))
+                        kb_doc_id = kb_cursor.fetchone()[0]
+                        logger.info(f"Created new document in KnowledgeDocuments: {kb_doc_id}")
+                    kb_conn.commit()  # Commit after each document to avoid transaction issues
+                    documents_staged += 1
+                    
+                    # Create LLM response entries for each connection/prompt combination
+                    logger.info(f"Creating LLM responses for document {kb_doc_id} with {len(connection_ids)} connections and {len(prompt_ids)} prompts")
+                    for conn_id in connection_ids:
+                        # Get connection details from database
+                        connection = session.query(Connection).filter_by(id=conn_id).first()
+                        if not connection:
+                            logger.warning(f"Connection {conn_id} not found in database")
+                            continue
+                            
+                        # Get model and provider details for LLM config
+                        model_name = 'default'
+                        provider_type = 'ollama'
+                        
+                        if connection.model_id:
+                            model = session.query(Model).filter_by(id=connection.model_id).first()
+                            if model:
+                                model_name = model.display_name
+                        
+                        if connection.provider_id:
+                            provider = session.query(LlmProvider).filter_by(id=connection.provider_id).first()
+                            if provider:
+                                provider_type = provider.provider_type
+                            
+                        conn_details = {
+                            'id': connection.id,
+                            'name': connection.name,
+                            'provider_id': connection.provider_id,
+                            'model_id': connection.model_id,
+                            'model_name': model_name,
+                            'provider_type': provider_type,
+                            'api_key': connection.api_key,
+                            'base_url': connection.base_url,
+                            'port_no': connection.port_no,
+                            'connection_config': connection.connection_config
+                        }
+                        
+                        for prompt_id in prompt_ids:
+                            try:
+                                logger.info(f"Inserting llm_response: doc_id={kb_doc_id}, prompt_id={prompt_id}, conn_id={conn_id}, batch_id={batch_id}")
+                                kb_cursor.execute("""
+                                    INSERT INTO llm_responses 
+                                    (document_id, prompt_id, connection_id, connection_details, 
+                                     status, created_at, batch_id)
+                                    VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                                    RETURNING id
+                                """, (
+                                    kb_doc_id,
+                                    prompt_id,
+                                    conn_id,
+                                    json.dumps(conn_details),
+                                    'QUEUED',
+                                    batch_id
+                                ))
+                                result = kb_cursor.fetchone()
+                                if result:
+                                    kb_conn.commit()  # Commit each llm_response individually
+                                    responses_created += 1
+                                    logger.info(f"Created llm_response with id: {result[0]}")
+                                else:
+                                    kb_conn.rollback()  # Rollback if insert failed
+                                    logger.warning(f"llm_response insert returned nothing")
+                            except Exception as e:
+                                kb_conn.rollback()  # Rollback on error
+                                logger.error(f"Error inserting llm_response: {e}")
+                                logger.error(f"Values: doc_id={kb_doc_id}, prompt_id={prompt_id}, conn_id={conn_id}, batch_id={batch_id}")
+                    
+                except Exception as e:
+                    logger.error(f"Error staging document {doc.filename}: {e}")
+                    continue
+            
+            # Close database connection
+            kb_cursor.close()
+            kb_conn.close()
+            
+            logger.info(f"Staging completed for batch {batch_id}: {documents_staged} documents, {responses_created} responses")
+            
+            return {
+                'success': True,
+                'total_documents': documents_staged,
+                'total_responses': responses_created,
+                'message': f'Successfully staged {documents_staged} documents'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in _perform_staging: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'total_documents': 0,
+                'total_responses': 0
+            }
+
+    def get_staging_status(self, batch_id: int) -> Dict[str, Any]:
+        """Get staging status for a batch"""
+        logger.info(f"get_staging_status called for batch {batch_id}")
+        
+        try:
+            session = Session()
+            batch = session.query(Batch).filter_by(id=batch_id).first()
+            
+            if not batch:
+                session.close()
+                return {
+                    'batch_id': batch_id,
+                    'status': 'NOT_FOUND',
+                    'message': f'Batch {batch_id} not found'
+                }
+            
+            session.close()
+            
+            return {
+                'batch_id': batch_id,
+                'status': batch.status,
+                'total_documents': batch.total_documents,
+                'message': f'Batch {batch_id} status: {batch.status}'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting staging status for batch {batch_id}: {e}")
+            return {
+                'batch_id': batch_id,
+                'status': 'ERROR',
+                'error': str(e),
+                'message': f'Error getting status for batch {batch_id}'
+            }
+
+    def get_batches_ready_for_processing(self) -> List[Dict[str, Any]]:
+        """
+        Get all batches with STAGED status or PROCESSING status with queued documents
+        
+        Returns:
+            List of batch dictionaries with basic info
+        """
+        session = Session()
+        try:
+            # Query batches with STAGED or PROCESSING status
+            batches = session.query(Batch).filter(
+                Batch.status.in_(['STAGED', 'PROCESSING'])
+            ).order_by(Batch.created_at.asc()).all()
+            
+            result = []
+            for batch in batches:
+                # For PROCESSING batches, check if they have queued documents
+                if batch.status == 'PROCESSING':
+                    try:
+                        kb_conn = psycopg2.connect(
+                            host="studio.local",
+                            database="KnowledgeDocuments",
+                            user="postgres",
+                            password="prodogs03",
+                            port=5432
+                        )
+                        kb_cursor = kb_conn.cursor()
+                        
+                        # Check if batch has queued documents
+                        kb_cursor.execute("""
+                            SELECT COUNT(*) 
+                            FROM llm_responses 
+                            WHERE batch_id = %s AND status = 'QUEUED'
+                        """, (batch.id,))
+                        
+                        queued_count = kb_cursor.fetchone()[0]
+                        kb_cursor.close()
+                        kb_conn.close()
+                        
+                        # Skip PROCESSING batches with no queued documents
+                        if queued_count == 0:
+                            continue
+                            
+                    except Exception as e:
+                        logger.error(f"Error checking queued documents for batch {batch.id}: {e}")
+                        continue
+                
+                result.append({
+                    'batch_id': batch.id,
+                    'batch_number': batch.batch_number,
+                    'batch_name': batch.batch_name,
+                    'total_documents': batch.total_documents,
+                    'processed_documents': batch.processed_documents,
+                    'status': batch.status,
+                    'created_at': batch.created_at.isoformat() if batch.created_at else None
+                })
+            
+            logger.info(f"Found {len(result)} batches ready for processing")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting batches ready for processing: {e}")
+            return []
+        finally:
+            session.close()
+
+    def get_next_document_for_processing(self, batch_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get next QUEUED document from batch for processing
+        
+        Args:
+            batch_id: ID of the batch to get document from
+            
+        Returns:
+            Dict with document details and encoded content, or None if no documents available
+        """
+        session = Session()
+        try:
+            # Verify batch exists and is in correct state
+            batch = session.query(Batch).filter_by(id=batch_id).first()
+            if not batch:
+                logger.error(f"Batch {batch_id} not found")
+                return None
+                
+            if batch.status not in ['STAGED', 'PROCESSING']:
+                logger.warning(f"Batch {batch_id} not in processable state: {batch.status}")
+                return None
+            
+            # Update batch status if needed
+            if batch.status == 'STAGED':
+                batch.status = 'PROCESSING'
+                batch.started_at = func.now()
+                session.commit()
+            
+            # Connect to KnowledgeDocuments database to get next queued response
+            try:
+                kb_conn = psycopg2.connect(
+                    host="studio.local",
+                    database="KnowledgeDocuments",
+                    user="postgres",
+                    password="prodogs03",
+                    port=5432
+                )
+                kb_cursor = kb_conn.cursor()
+                
+                # Get next QUEUED llm_response for this batch
+                kb_cursor.execute("""
+                    SELECT lr.id, lr.document_id, lr.prompt_id, lr.connection_id, 
+                           lr.connection_details, d.document_id as kb_doc_id
+                    FROM llm_responses lr
+                    JOIN docs d ON lr.document_id = d.id
+                    WHERE lr.batch_id = %s AND lr.status = 'QUEUED'
+                    ORDER BY lr.created_at ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                """, (batch_id,))
+                
+                response_row = kb_cursor.fetchone()
+                
+                if not response_row:
+                    kb_cursor.close()
+                    kb_conn.close()
+                    logger.info(f"No queued documents found for batch {batch_id}")
+                    return None
+                
+                response_id, doc_id, prompt_id, connection_id, connection_details, kb_doc_id = response_row
+                
+                # Get document content from docs table
+                kb_cursor.execute("""
+                    SELECT content, content_type, doc_type, file_size
+                    FROM docs
+                    WHERE id = %s
+                """, (doc_id,))
+                
+                doc_row = kb_cursor.fetchone()
+                if not doc_row:
+                    kb_cursor.close()
+                    kb_conn.close()
+                    logger.error(f"Document {doc_id} not found in KnowledgeDocuments")
+                    return None
+                
+                content, content_type, doc_type, file_size = doc_row
+                
+                # Get prompt details from local database
+                prompt = session.query(Prompt).filter_by(id=prompt_id).first()
+                if not prompt:
+                    kb_cursor.close()
+                    kb_conn.close()
+                    logger.error(f"Prompt {prompt_id} not found")
+                    return None
+                
+                # Parse connection details
+                if isinstance(connection_details, str):
+                    connection_details = json.loads(connection_details)
+                
+                # Format the document data for processing
+                result = {
+                    'response_id': response_id,
+                    'doc_id': doc_id,
+                    'batch_id': batch_id,
+                    'document_id': kb_doc_id,  # The unique document_id for RAG API
+                    'encoded_content': content,  # Already base64 encoded
+                    'content_type': content_type,
+                    'doc_type': doc_type,
+                    'file_size': file_size,
+                    'prompt': {
+                        'id': prompt_id,
+                        'text': prompt.prompt_text,
+                        'description': prompt.description
+                    },
+                    'llm_config': format_llm_config_for_rag_api(connection_details),
+                    'connection_id': connection_id,
+                    'connection_details': connection_details
+                }
+                
+                kb_cursor.close()
+                kb_conn.close()
+                
+                logger.info(f"Retrieved document {doc_id} for processing from batch {batch_id}")
+                return result
+                
+            except Exception as e:
+                logger.error(f"Error accessing KnowledgeDocuments database: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting next document for processing: {e}")
+            return None
+        finally:
+            session.close()
+
+    def update_document_task(self, doc_id: int, task_id: str, status: str = 'PROCESSING') -> bool:
+        """
+        Update document with task_id when processing starts
+        
+        Args:
+            doc_id: Document ID (from llm_responses)
+            task_id: Task ID from RAG API
+            status: New status (default: PROCESSING)
+            
+        Returns:
+            bool: Success status
+        """
+        try:
+            # Update in KnowledgeDocuments database
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            kb_cursor.execute("""
+                UPDATE llm_responses 
+                SET status = %s,
+                    task_id = %s,
+                    started_processing_at = NOW()
+                WHERE id = %s
+            """, (status, task_id, doc_id))
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            logger.info(f"Updated document {doc_id} with task_id {task_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating document task: {e}")
+            return False
+
+    def update_document_status(self, doc_id: int, status: str, response_data: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Update document status (COMPLETED/FAILED) with results
+        
+        Args:
+            doc_id: Document ID (from llm_responses)
+            status: Final status (COMPLETED/FAILED/TIMEOUT)
+            response_data: Response data including text, tokens, etc.
+            
+        Returns:
+            bool: Success status
+        """
+        session = Session()
+        try:
+            # Update in KnowledgeDocuments database
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Get batch_id for this document
+            kb_cursor.execute("""
+                SELECT batch_id FROM llm_responses WHERE id = %s
+            """, (doc_id,))
+            
+            batch_row = kb_cursor.fetchone()
+            if not batch_row:
+                kb_cursor.close()
+                kb_conn.close()
+                logger.error(f"Document {doc_id} not found in llm_responses")
+                return False
+                
+            batch_id = batch_row[0]
+            
+            # Update the llm_response record
+            if status == 'COMPLETED' and response_data:
+                kb_cursor.execute("""
+                    UPDATE llm_responses 
+                    SET status = %s,
+                        response_text = %s,
+                        response_json = %s,
+                        completed_processing_at = NOW(),
+                        input_tokens = %s,
+                        output_tokens = %s,
+                        response_time_ms = %s,
+                        overall_score = %s
+                    WHERE id = %s
+                """, (
+                    status,
+                    response_data.get('response_text', ''),
+                    json.dumps(response_data) if response_data else None,
+                    response_data.get('input_tokens', 0),
+                    response_data.get('output_tokens', 0),
+                    response_data.get('response_time_ms', 0),
+                    response_data.get('overall_score'),
+                    doc_id
+                ))
+            else:
+                # Failed or timeout status
+                kb_cursor.execute("""
+                    UPDATE llm_responses 
+                    SET status = %s,
+                        error_message = %s,
+                        completed_processing_at = NOW()
+                    WHERE id = %s
+                """, (
+                    status,
+                    response_data.get('error', 'Unknown error') if response_data else 'Processing failed',
+                    doc_id
+                ))
+            
+            kb_conn.commit()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            # Update batch processed count and check completion for both completed and failed documents
+            if status in ['COMPLETED', 'FAILED', 'TIMEOUT']:
+                batch = session.query(Batch).filter_by(id=batch_id).first()
+                if batch and status == 'COMPLETED':
+                    batch.processed_documents = (batch.processed_documents or 0) + 1
+                    session.commit()
+                    
+                # Check if batch is complete (for any final status)
+                self.check_and_update_batch_completion(batch_id)
+            
+            logger.info(f"Updated document {doc_id} status to {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating document status: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
+    def check_and_update_batch_completion(self, batch_id: int) -> bool:
+        """
+        Check if all documents processed and update batch status
+        
+        Args:
+            batch_id: ID of the batch to check
+            
+        Returns:
+            bool: True if batch is complete, False otherwise
+        """
+        session = Session()
+        try:
+            batch = session.query(Batch).filter_by(id=batch_id).first()
+            if not batch:
+                logger.error(f"Batch {batch_id} not found")
+                return False
+            
+            # Check document processing status in KnowledgeDocuments
+            kb_conn = psycopg2.connect(
+                host="studio.local",
+                database="KnowledgeDocuments",
+                user="postgres",
+                password="prodogs03",
+                port=5432
+            )
+            kb_cursor = kb_conn.cursor()
+            
+            # Get counts of different statuses
+            kb_cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
+                    SUM(CASE WHEN status IN ('QUEUED', 'PROCESSING') THEN 1 ELSE 0 END) as pending
+                FROM llm_responses
+                WHERE batch_id = %s
+            """, (batch_id,))
+            
+            counts = kb_cursor.fetchone()
+            kb_cursor.close()
+            kb_conn.close()
+            
+            if not counts:
+                logger.warning(f"No responses found for batch {batch_id}")
+                return False
+                
+            total, completed, failed, pending = counts
+            
+            # Update batch with current counts
+            batch.total_documents = total
+            batch.processed_documents = completed + failed
+            
+            # Check if all documents are processed
+            if pending == 0:
+                # All documents processed
+                batch.status = 'COMPLETED'
+                batch.completed_at = func.now()
+                session.commit()
+                
+                logger.info(f"Batch {batch_id} completed. Total: {total}, Completed: {completed}, Failed: {failed}")
+                return True
+            else:
+                # Still processing
+                session.commit()
+                logger.info(f"Batch {batch_id} still processing. Pending: {pending}/{total}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error checking batch completion: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
 
 # Global instance
 batch_service = BatchService()

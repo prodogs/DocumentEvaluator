@@ -1,0 +1,153 @@
+@startuml BatchService_KnowledgeQueueProcessor_Architecture
+
+title Document Processing Service Architecture - Class Diagram
+
+package "Core Services" {
+    class BatchService {
+        - logger: Logger
+        - document_encoding_service: DocumentEncodingService
+        --
+        + create_batch(name, folder_ids, meta_data): Dict
+        + stage_batch(batch_id): Dict
+        + get_batches_ready_for_processing(): List[Batch]
+        + get_next_document_for_processing(batch_id): Dict
+        + update_document_task(doc_id, task_id, status): bool
+        + update_document_status(doc_id, status, response_data): bool
+        + check_and_update_batch_completion(batch_id): bool
+        + get_batch_status(batch_id): Dict
+        + rerun_batch(batch_id): Dict
+        - _create_config_snapshot(folder_ids): Dict
+        - _handle_batch_completion(batch): void
+    }
+
+    class KnowledgeQueueProcessor {
+        - check_interval: int
+        - max_concurrent: int
+        - is_running: bool
+        - processing_thread: Thread
+        - batch_service: BatchService
+        - rag_api_url: str
+        - stats: Dict
+        --
+        + start(): void
+        + stop(): void
+        + get_status(): Dict
+        + monitor_batches(): void
+        + process_batch_document(batch_id): Dict
+        + report_task_completion(doc_id, status, result): void
+        - _process_loop(): void
+        - _get_processing_count(): int
+        - _call_rag_api(llm_config, prompt, document_id): str
+        - _handle_task_status_check(task_id): Dict
+    }
+
+    class DocumentEncodingService {
+        + encode_document(filepath): str
+        + validate_encoding(encoded_content, original_size): bool
+        + get_document_metadata(filepath): Dict
+    }
+}
+
+package "External Services" {
+    class RAGServiceClient {
+        - base_url: str
+        - timeout: int
+        --
+        + submit_document(doc_id, prompt, llm_config): Dict
+        + check_task_status(task_id): Dict
+        + get_task_result(task_id): Dict
+    }
+}
+
+package "Database Models" {
+    class Batch {
+        + id: int
+        + batch_number: int
+        + batch_name: str
+        + status: str
+        + created_at: datetime
+        + started_at: datetime
+        + completed_at: datetime
+        + processed_documents: int
+        + total_documents: int
+        + config_snapshot: Dict
+        + meta_data: Dict
+        + folder_ids: List[int]
+    }
+
+    class Document {
+        + id: int
+        + batch_id: int
+        + folder_id: int
+        + filename: str
+        + filepath: str
+        + file_size: int
+        + encoding_status: str
+        + processing_status: str
+        + task_id: str
+        + created_at: datetime
+        + processed_at: datetime
+        + meta_data: Dict
+    }
+
+    class LlmResponse {
+        + id: int
+        + document_id: int
+        + prompt_id: int
+        + connection_id: int
+        + batch_id: int
+        + status: str
+        + task_id: str
+        + response_text: str
+        + response_json: Dict
+        + started_processing_at: datetime
+        + completed_processing_at: datetime
+        + input_tokens: int
+        + output_tokens: int
+        + response_time_ms: int
+        + error_message: str
+    }
+}
+
+package "KnowledgeDocuments DB" {
+    class KnowledgeDoc {
+        + id: int
+        + document_id: str
+        + content: str
+        + content_type: str
+        + doc_type: str
+        + file_size: int
+        + encoding: str
+        + created_at: datetime
+    }
+}
+
+' Relationships
+BatchService ..> DocumentEncodingService : uses
+BatchService ..> Batch : manages
+BatchService ..> Document : manages
+BatchService ..> KnowledgeDoc : creates
+
+KnowledgeQueueProcessor ..> BatchService : queries/updates
+KnowledgeQueueProcessor ..> RAGServiceClient : submits tasks
+KnowledgeQueueProcessor ..> LlmResponse : creates/updates
+
+Batch "1" *-- "many" Document : contains
+Document "1" -- "many" LlmResponse : generates
+Document "1" -- "1" KnowledgeDoc : stored as
+
+note right of BatchService
+  Central controller for all batch operations
+  - Owns batch lifecycle
+  - Manages document state
+  - Tracks completion
+end note
+
+note right of KnowledgeQueueProcessor
+  Asynchronous processor
+  - Monitors for ready batches
+  - Handles RAG API communication
+  - Reports results back
+end note
+
+@enduml

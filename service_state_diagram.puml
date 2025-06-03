@@ -1,0 +1,124 @@
+@startuml BatchProcessing_States
+
+title Batch and Document State Transitions
+
+state "Batch States" as batch_states {
+    [*] --> CREATED: create_batch()
+    
+    CREATED --> PREPARED: Documents added
+    PREPARED --> STAGED: stage_batch()
+    STAGED --> PROCESSING: First document starts
+    PROCESSING --> COMPLETED: All documents done
+    COMPLETED --> STAGED: rerun_batch()
+    
+    PREPARED --> FAILED: Staging error
+    STAGED --> FAILED: Critical error
+    PROCESSING --> FAILED: Unrecoverable error
+    
+    state CREATED {
+        note: Batch created\nNo documents yet
+    }
+    
+    state PREPARED {
+        note: Documents added\nConfig snapshot taken\nReady for staging
+    }
+    
+    state STAGED {
+        note: Documents encoded\nLLM responses queued\nReady for processing
+    }
+    
+    state PROCESSING {
+        note: Active processing\nSome docs complete\nSome in progress
+    }
+    
+    state COMPLETED {
+        note: All documents processed\nResults available\nCan be rerun
+    }
+    
+    state FAILED {
+        note: Unrecoverable error\nManual intervention needed
+    }
+}
+
+--
+
+state "Document/LLM Response States" as doc_states {
+    [*] --> CREATED: Document created
+    
+    CREATED --> ENCODED: Encoding success
+    CREATED --> ENCODING_FAILED: Encoding error
+    
+    ENCODED --> QUEUED: LLM response created
+    QUEUED --> PROCESSING: Task submitted
+    PROCESSING --> COMPLETED: Task success
+    PROCESSING --> FAILED: Task error
+    PROCESSING --> TIMEOUT: Task timeout
+    PROCESSING --> QUEUED: Reset stuck
+    
+    COMPLETED --> QUEUED: Rerun requested
+    FAILED --> QUEUED: Retry requested
+    TIMEOUT --> QUEUED: Retry requested
+    
+    state CREATED {
+        note: Document record exists\nNot yet encoded
+    }
+    
+    state ENCODED {
+        note: Document encoded\nin KnowledgeDocuments
+    }
+    
+    state QUEUED {
+        note: Ready for processing\nWaiting for processor
+    }
+    
+    state PROCESSING {
+        note: Task submitted\nHas task_id\nMonitoring progress
+    }
+    
+    state COMPLETED {
+        note: Response received\nTokens counted\nScore calculated
+    }
+    
+    state FAILED {
+        note: Processing failed\nError recorded\nCan retry
+    }
+    
+    state TIMEOUT {
+        note: Task took too long\nNo response\nCan retry
+    }
+}
+
+--
+
+state "Processing Flow" as flow {
+    state "BatchService Controls" as bs_control {
+        state "Batch Management" as batch_mgmt
+        state "Document Retrieval" as doc_retrieval
+        state "Status Updates" as status_updates
+        state "Completion Check" as completion_check
+    }
+    
+    state "KnowledgeQueueProcessor" as kqp {
+        state "Monitor Loop" as monitor
+        state "Process Document" as process
+        state "Check Task Status" as check_status
+        state "Report Results" as report
+    }
+    
+    batch_mgmt --> doc_retrieval: Batch ready
+    doc_retrieval --> process: Next document
+    process --> check_status: Task submitted
+    check_status --> report: Task complete
+    report --> status_updates: Update status
+    status_updates --> completion_check: Check batch
+    completion_check --> monitor: Continue monitoring
+    monitor --> doc_retrieval: Check for work
+}
+
+note bottom of flow
+  BatchService owns all state transitions
+  KnowledgeQueueProcessor handles async operations
+  Clear separation of responsibilities
+end note
+
+@enduml

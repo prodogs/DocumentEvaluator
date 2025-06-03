@@ -18,6 +18,7 @@ import FolderManager from './components/FolderManager';
 import BatchDashboard from './components/BatchDashboard';
 import BatchManagement from './components/BatchManagement';
 import MaintenanceManager from './components/MaintenanceManager';
+import LlmResponsesViewer from './components/LlmResponsesViewer';
 
 // Use environment variable for API URL, fallback to localhost:5001
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
@@ -51,7 +52,7 @@ function App() {
   const [batchMetaData, setBatchMetaData] = useState('');
 
   // UI state
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'process', 'config', 'providers', 'folders', 'batches', 'maintenance'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'process', 'config', 'providers', 'folders', 'batches', 'maintenance', 'responses'
   const [showConfigModal, setShowConfigModal] = useState(false);
 
   // Accordion state for Analyze Documents page
@@ -701,8 +702,8 @@ function App() {
   };
 
   return (
-    <div className={`App ${(activeTab === 'batches' || activeTab === 'maintenance') ? 'full-width' : ''}`}>
-      {activeTab !== 'batches' && activeTab !== 'maintenance' && (
+    <div className={`App ${(activeTab === 'batches' || activeTab === 'maintenance' || activeTab === 'responses') ? 'full-width' : ''}`}>
+      {activeTab !== 'batches' && activeTab !== 'maintenance' && activeTab !== 'responses' && (
         <>
           <div className="banner-container">
             <img src="/banner2.png" alt="Document Batch Processor" className="banner-image" />
@@ -755,6 +756,12 @@ function App() {
               onClick={() => handleTabChange('maintenance')}
             >
               🔧 Maintenance
+            </button>
+            <button
+              className={activeTab === 'responses' ? 'tab active' : 'tab'}
+              onClick={() => handleTabChange('responses')}
+            >
+              🔍 Responses
             </button>
           </div>
 
@@ -847,6 +854,11 @@ function App() {
       {/* Maintenance Manager - Full Screen */}
       {activeTab === 'maintenance' && (
         <MaintenanceManager onNavigateBack={() => setActiveTab('dashboard')} />
+      )}
+
+      {/* LLM Responses Viewer - Full Screen */}
+      {activeTab === 'responses' && (
+        <LlmResponsesViewer />
       )}
     </div>
   );

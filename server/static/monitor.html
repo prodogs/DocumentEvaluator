@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Monitor - DocumentEvaluator</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .status-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .healthy { background: #4CAF50; }
+        .degraded { background: #FFC107; }
+        .unhealthy { background: #F44336; }
+        .metric {
+            display: inline-block;
+            margin: 10px 20px 10px 0;
+        }
+        .metric-label {
+            color: #666;
+            font-size: 14px;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .alert {
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .alert-warning {
+            background: #FFF3CD;
+            border: 1px solid #FFEAA7;
+            color: #856404;
+        }
+        .alert-critical {
+            background: #F8D7DA;
+            border: 1px solid #F5C6CB;
+            color: #721C24;
+        }
+        .refresh-info {
+            text-align: right;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #444;
+        }
+        .service-status {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .service-status:last-child {
+            border-bottom: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.3s ease;
+        }
+        .progress-fill.warning {
+            background: #FFC107;
+        }
+        .progress-fill.danger {
+            background: #F44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="refresh-info">
+            Auto-refresh: <span id="countdown">5</span>s | Last update: <span id="lastUpdate">-</span>
+        </div>
+        
+        <h1>System Monitor</h1>
+        
+        <div id="alerts"></div>
+        
+        <div class="status-card">
+            <div class="section-title">System Health</div>
+            <div id="systemHealth">
+                <p>Loading...</p>
+            </div>
+        </div>
+        
+        <div class="status-card">
+            <div class="section-title">Services Status</div>
+            <div id="servicesStatus">
+                <p>Loading...</p>
+            </div>
+        </div>
+        
+        <div class="status-card">
+            <div class="section-title">Batch Processing Metrics (Last 24 Hours)</div>
+            <div id="batchMetrics">
+                <p>Loading...</p>
+            </div>
+        </div>
+        
+        <div class="status-card">
+            <div class="section-title">Processing Queue Status</div>
+            <div id="queueStatus">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let refreshInterval = 5;
+        let countdown = refreshInterval;
+
+        async function fetchDashboard() {
+            try {
+                const response = await fetch('/api/dashboard');
+                const data = await response.json();
+                updateDashboard(data);
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+            } catch (error) {
+                console.error('Failed to fetch dashboard:', error);
+            }
+        }
+
+        function updateDashboard(data) {
+            // Update system health
+            const healthStatus = data.health.status;
+            const healthIndicator = `<span class="status-indicator ${healthStatus}"></span>`;
+            document.getElementById('systemHealth').innerHTML = `
+                <div>
+                    Overall Status: ${healthIndicator} <strong>${healthStatus.toUpperCase()}</strong>
+                </div>
+                ${data.health.issues.length > 0 ? 
+                    '<div style="margin-top: 10px; color: #666;">Issues: ' + data.health.issues.join(', ') + '</div>' : 
+                    ''}
+            `;
+
+            // Update services status
+            const services = data.health.services;
+            let servicesHtml = '';
+            for (const [name, status] of Object.entries(services)) {
+                const indicator = `<span class="status-indicator ${status.status}"></span>`;
+                let displayName = name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                if (name === 'knowledgesync_database') {
+                    displayName = 'KnowledgeSync Database (Main)';
+                } else if (name === 'knowledge_database') {
+                    displayName = 'KnowledgeDocuments Database (Queue)';
+                }
+                
+                servicesHtml += `
+                    <div class="service-status">
+                        <div>${displayName}</div>
+                        <div>${indicator} ${status.status}</div>
+                    </div>
+                `;
+            }
+            document.getElementById('servicesStatus').innerHTML = servicesHtml;
+
+            // Update alerts
+            let alertsHtml = '';
+            if (data.alerts && data.alerts.length > 0) {
+                data.alerts.forEach(alert => {
+                    alertsHtml += `
+                        <div class="alert alert-${alert.level}">
+                            <strong>${alert.level.toUpperCase()}:</strong> ${alert.message}
+                            ${alert.details ? '<br>Details: ' + alert.details.join(', ') : ''}
+                        </div>
+                    `;
+                });
+            }
+            document.getElementById('alerts').innerHTML = alertsHtml;
+
+            // Update batch metrics
+            if (data.metrics && data.metrics.batches) {
+                const batches = data.metrics.batches;
+                const last24 = batches.last_24_hours;
+                const failureRate = last24.failure_rate || 0;
+                const progressClass = failureRate > 20 ? 'danger' : failureRate > 10 ? 'warning' : '';
+                
+                document.getElementById('batchMetrics').innerHTML = `
+                    <div class="metric">
+                        <div class="metric-label">Total Batches</div>
+                        <div class="metric-value">${batches.total_batches}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Last 24h</div>
+                        <div class="metric-value">${last24.total}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Completed</div>
+                        <div class="metric-value">${last24.completed}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Failed</div>
+                        <div class="metric-value">${last24.failed}</div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div class="metric-label">Success Rate</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill ${progressClass}" style="width: ${100 - failureRate}%"></div>
+                        </div>
+                        <div style="text-align: center; margin-top: 5px;">${(100 - failureRate).toFixed(1)}%</div>
+                    </div>
+                `;
+            }
+
+            // Update queue status
+            if (data.metrics && data.metrics.queue) {
+                const queue = data.metrics.queue;
+                const lastHour = queue.last_hour;
+                document.getElementById('queueStatus').innerHTML = `
+                    <div class="metric">
+                        <div class="metric-label">Queued</div>
+                        <div class="metric-value">${lastHour.queued}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Processing</div>
+                        <div class="metric-value">${lastHour.processing}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Completed (1h)</div>
+                        <div class="metric-value">${lastHour.completed}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Failed</div>
+                        <div class="metric-value">${lastHour.failed}</div>
+                    </div>
+                    ${queue.alerts.stuck_processing > 0 ? 
+                        `<div style="margin-top: 15px; color: #F44336;">
+                            <strong>⚠️ ${queue.alerts.stuck_processing} items stuck in processing</strong>
+                        </div>` : ''}
+                `;
+            }
+        }
+
+        // Countdown timer
+        setInterval(() => {
+            countdown--;
+            if (countdown <= 0) {
+                countdown = refreshInterval;
+                fetchDashboard();
+            }
+            document.getElementById('countdown').textContent = countdown;
+        }, 1000);
+
+        // Initial fetch
+        fetchDashboard();
+    </script>
+</body>
+</html>

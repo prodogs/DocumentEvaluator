@@ -35,88 +35,10 @@ def list_services():
         return jsonify({'error': str(e)}), 500
 
 
-@service_routes.route('/api/services/queue/status', methods=['GET'])
-def get_queue_status():
-    """Get dynamic processing queue status"""
-    try:
-        from services.dynamic_processing_queue import dynamic_queue
-
-        status = dynamic_queue.get_queue_status()
-
-        return jsonify({
-            'success': True,
-            'queue_status': status
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error getting queue status: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 
-@service_routes.route('/api/services/queue/start', methods=['POST'])
-def start_queue():
-    """Start the dynamic processing queue"""
-    try:
-        from services.dynamic_processing_queue import dynamic_queue
-
-        # Check if already running
-        status = dynamic_queue.get_queue_status()
-        if status['queue_running']:
-            return jsonify({
-                'success': True,
-                'message': 'Dynamic processing queue is already running',
-                'queue_status': status
-            }), 200
-
-        # Start the queue
-        dynamic_queue.start_queue_processing()
-        logger.info("Dynamic processing queue started via API")
-
-        # Get updated status
-        updated_status = dynamic_queue.get_queue_status()
-
-        return jsonify({
-            'success': True,
-            'message': 'Dynamic processing queue started successfully',
-            'queue_status': updated_status
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error starting queue: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 
-@service_routes.route('/api/services/queue/stop', methods=['POST'])
-def stop_queue():
-    """Stop the dynamic processing queue"""
-    try:
-        from services.dynamic_processing_queue import dynamic_queue
-
-        # Stop the queue
-        dynamic_queue.stop_queue_processing()
-        logger.info("Dynamic processing queue stopped via API")
-
-        # Get updated status
-        updated_status = dynamic_queue.get_queue_status()
-
-        return jsonify({
-            'success': True,
-            'message': 'Dynamic processing queue stopped successfully',
-            'queue_status': updated_status
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error stopping queue: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 
 @service_routes.route('/api/services/polling/status', methods=['GET'])
@@ -1037,16 +959,17 @@ def fetch_available_models():
         logger.error(f"Error fetching available models: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@service_routes.route('/api/llm-responses', methods=['GET'])
-def list_llm_responses():
-    """DEPRECATED: LLM responses listing - LlmResponse moved to KnowledgeDocuments database"""
-    return jsonify({
-        'deprecated': True,
-        'error': 'LLM responses listing service moved to KnowledgeDocuments database',
-        'reason': 'llm_responses table moved to separate database',
-        'responses': [],
-        'total_count': 0
-    }), 410  # 410 Gone - resource no longer available
+# Deprecated endpoint removed - now handled by llm_responses_routes.py
+# @service_routes.route('/api/llm-responses', methods=['GET'])
+# def list_llm_responses():
+#     """DEPRECATED: LLM responses listing - LlmResponse moved to KnowledgeDocuments database"""
+#     return jsonify({
+#         'deprecated': True,
+#         'error': 'LLM responses listing service moved to KnowledgeDocuments database',
+#         'reason': 'llm_responses table moved to separate database',
+#         'responses': [],
+#         'total_count': 0
+#     }), 410  # 410 Gone - resource no longer available
 
 @service_routes.route('/api/folders', methods=['GET'])
 def list_folders():

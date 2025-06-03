@@ -1,0 +1,235 @@
+@startuml DocumentEvaluator Service Layer Class Diagram
+
+!define ABSTRACT_CLASS abstract
+!define SERVICE_COLOR #E8F5E9
+!define PROVIDER_COLOR #E3F2FD
+!define DEPRECATED_COLOR #FFEBEE
+
+' Base Provider Classes
+abstract class BaseLLMProvider <<abstract>> {
+  # provider_type: str
+  # logger: Logger
+  --
+  + __init__(provider_type: str)
+  + {abstract} test_connection(config: Dict): Tuple[bool, str]
+  + {abstract} discover_models(config: Dict): Tuple[bool, List[Dict], str]
+  + {abstract} validate_config(config: Dict): Tuple[bool, str]
+  + get_default_config(): Dict
+  + format_error_message(error: Exception): str
+}
+
+' Provider Implementations
+class OllamaProvider #PROVIDER_COLOR {
+  + test_connection(config: Dict): Tuple[bool, str]
+  + discover_models(config: Dict): Tuple[bool, List[Dict], str]
+  + validate_config(config: Dict): Tuple[bool, str]
+  - _make_request(endpoint: str, config: Dict): Dict
+}
+
+class OpenAIProvider #PROVIDER_COLOR {
+  + test_connection(config: Dict): Tuple[bool, str]
+  + discover_models(config: Dict): Tuple[bool, List[Dict], str]
+  + validate_config(config: Dict): Tuple[bool, str]
+  - _get_api_key(config: Dict): str
+}
+
+class LMStudioProvider #PROVIDER_COLOR {
+  + test_connection(config: Dict): Tuple[bool, str]
+  + discover_models(config: Dict): Tuple[bool, List[Dict], str]
+  + validate_config(config: Dict): Tuple[bool, str]
+}
+
+class AmazonProvider #PROVIDER_COLOR {
+  + test_connection(config: Dict): Tuple[bool, str]
+  + discover_models(config: Dict): Tuple[bool, List[Dict], str]
+  + validate_config(config: Dict): Tuple[bool, str]
+  - _get_bedrock_client(config: Dict): Any
+}
+
+class GrokProvider #PROVIDER_COLOR {
+  + test_connection(config: Dict): Tuple[bool, str]
+  + discover_models(config: Dict): Tuple[bool, List[Dict], str]
+  + validate_config(config: Dict): Tuple[bool, str]
+}
+
+' Core Service Classes
+class BatchService #SERVICE_COLOR {
+  --
+  + __init__()
+  + create_batch(batch_data: Dict): Dict
+  + save_batch(folder_ids, connection_ids, prompt_ids, batch_name, description, meta_data): Dict
+  + stage_batch(folder_ids, connection_ids, prompt_ids, batch_name, description, meta_data): Dict
+  + restage_batch(batch_id: int): Dict
+  + update_batch(batch_id: int, updates: Dict): Dict
+  + get_batch(batch_id: int): Optional[Dict]
+  + cancel_batch(batch_id: int): bool
+  + get_batch_progress(batch_id: int): Dict
+  + get_staging_status(batch_id: int): Dict
+  + _create_config_snapshot(folder_ids: List[int]): Dict
+  + _perform_staging(session, batch_id, folder_ids, connection_ids, prompt_ids, encoding_service): Dict
+  - _handle_llm_response_deprecation(method_name: str): Dict
+}
+
+class ConnectionService #SERVICE_COLOR {
+  - provider_service: LlmProviderService
+  --
+  + __init__()
+  + get_all_connections(): List[Dict]
+  + get_connection_by_id(connection_id: int): Optional[Dict]
+  + create_connection(connection_data: Dict): Dict
+  + update_connection(connection_id: int, connection_data: Dict): Optional[Dict]
+  + test_connection(connection_id: int, test_config: Optional[Dict]): Tuple[bool, str]
+  + delete_connection(connection_id: int): bool
+}
+
+class ModelService #SERVICE_COLOR {
+  --
+  + get_all_models(): List[Dict]
+  + get_model_by_id(model_id: int): Optional[Dict]
+  + create_model(model_data: Dict): Dict
+  + update_model(model_id: int, model_data: Dict): Optional[Dict]
+  + discover_and_link_models(provider_id: int, discovered_models: List[Dict]): Tuple[int, int]
+  + delete_model(model_id: int): bool
+}
+
+class DocumentEncodingService #SERVICE_COLOR {
+  - supported_extensions: set
+  - doc_config: DocumentConfig
+  --
+  + __init__()
+  + encode_and_store_document(file_path: str, session: Session): Optional[int]
+  + get_encoded_document_by_path(file_path: str, session: Session): Optional[Dict]
+  + prepare_document_for_llm(document: Document, session: Session): Optional[Dict]
+  + batch_encode_documents(file_paths: list, session: Session): Dict[str, Optional[int]]
+}
+
+class DynamicProcessingQueue #DEPRECATED_COLOR {
+  - check_interval: int
+  - max_outstanding: int
+  - queue_thread: Optional[Thread]
+  - stop_queue: bool
+  - processing_lock: Lock
+  --
+  + __init__(check_interval=5, max_outstanding=30)
+  + start_queue_processing()
+  + stop_queue_processing()
+  + get_queue_status(): Dict
+  + force_process_waiting(): Dict
+  --
+  DEPRECATED: Moved to KnowledgeDocuments DB
+}
+
+class FolderPreprocessingService #SERVICE_COLOR {
+  - session: Optional[Session]
+  - doc_config: DocumentConfig
+  - VALID_EXTENSIONS: set
+  --
+  + __init__()
+  + preprocess_folder_async(folder_path, folder_name, task_id, app): Dict
+  + preprocess_folder(folder_path: str, folder_name: str): Dict
+  + get_folder_status(folder_id: int): Optional[Dict]
+  - _scan_folder_files(folder_path: str): Tuple[List[Dict], int]
+}
+
+class LlmProviderService #SERVICE_COLOR {
+  - provider_adapters: Dict[str, BaseLLMProvider]
+  --
+  + __init__()
+  + get_all_providers(): List[Dict]
+  + get_provider_by_id(provider_id: int): Optional[Dict]
+  + create_provider(provider_data: Dict): Dict
+  + test_connection(provider_config: Dict): Tuple[bool, str]
+  + discover_models(provider_id: int, provider_config: Dict): Tuple[bool, List[Dict], str]
+}
+
+class ServiceHealthMonitor #SERVICE_COLOR {
+  - check_interval: int
+  - health_checks: Dict[str, List[HealthCheck]]
+  - current_status: Dict[str, HealthStatus]
+  - monitoring_thread: Optional[Thread]
+  - stop_monitoring: bool
+  - max_history: int
+  --
+  + __init__(check_interval=30)
+  + start_monitoring()
+  + stop_monitoring_service()
+  + get_service_status(service_name: str): Optional[HealthStatus]
+  + get_all_service_status(): Dict[str, Dict]
+  + check_service_now(service_name: str): Optional[HealthCheck]
+}
+
+class ModelNormalizationService #SERVICE_COLOR {
+  --
+  + normalize_model_name(model_name: str): str
+  + extract_model_info(model_name: str): Dict
+  + is_similar_model(model1: str, model2: str): bool
+}
+
+class BatchArchiveService #SERVICE_COLOR {
+  --
+  + archive_batch(batch_id: int): bool
+  + restore_batch(batch_id: int): bool
+  + list_archived_batches(): List[Dict]
+}
+
+class BatchCleanupService #SERVICE_COLOR {
+  --
+  + cleanup_old_batches(days_old: int): int
+  + cleanup_failed_batches(): int
+  + get_cleanup_candidates(days_old: int): List[Dict]
+}
+
+class StartupRecovery #SERVICE_COLOR {
+  --
+  + recover_interrupted_tasks(): Dict
+  + check_batch_consistency(): List[Dict]
+  + reset_stuck_connections(): int
+}
+
+class KnowledgeQueueProcessor #SERVICE_COLOR {
+  - processing_thread: Optional[Thread]
+  - stop_processing: bool
+  - max_concurrent: int
+  --
+  + __init__(max_concurrent=30)
+  + start_processing()
+  + stop_processing()
+  + get_queue_status(): Dict
+  + process_document(doc_id: int): bool
+}
+
+' Define Relationships
+
+' Inheritance
+OllamaProvider --|> BaseLLMProvider
+OpenAIProvider --|> BaseLLMProvider
+LMStudioProvider --|> BaseLLMProvider
+AmazonProvider --|> BaseLLMProvider
+GrokProvider --|> BaseLLMProvider
+
+' Dependencies
+ConnectionService --> LlmProviderService : uses
+LlmProviderService --> ModelService : uses
+BatchService --> DocumentEncodingService : uses
+FolderPreprocessingService ..> DocumentEncodingService : uses
+ModelService --> ModelNormalizationService : uses
+
+' Aggregation
+LlmProviderService *-- BaseLLMProvider : provider_adapters
+
+' Notes
+note right of ConnectionService : Singleton: connection_service
+note right of ModelService : Singleton: model_service
+note right of LlmProviderService : Singleton: llm_provider_service
+note right of ServiceHealthMonitor : Singleton: health_monitor
+note right of KnowledgeQueueProcessor : Replaces DynamicProcessingQueue
+
+' Legend
+legend right
+|= Color |= Meaning |
+|<#E8F5E9> | Core Service |
+|<#E3F2FD> | Provider Implementation |
+|<#FFEBEE> | Deprecated |
+endlegend
+
+@enduml

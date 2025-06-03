@@ -257,7 +257,13 @@ const BatchManagement = ({ onNavigateBack }) => {
       setActionLoading('reprocess-staging');
       setProgressMessage(`⚙️ Starting staging for batch "${batchName}"...`);
 
-      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/reprocess-staging`);
+      // Choose the correct endpoint based on batch status
+      const currentBatch = batchDetails || selectedBatch;
+      const endpoint = (currentBatch?.status === 'SAVED' || currentBatch?.status === 'FAILED_STAGING')
+        ? `/api/batches/${batchId}/stage`  // For SAVED and FAILED_STAGING batches
+        : `/api/batches/${batchId}/reprocess-staging`;  // For COMPLETED/FAILED/STAGED batches
+
+      const response = await axios.post(`${API_BASE_URL}${endpoint}`);
 
       if (response.data.success) {
         setError(null);
@@ -340,7 +346,7 @@ const BatchManagement = ({ onNavigateBack }) => {
       setActionLoading('rerun-analysis');
       setProgressMessage(`🔄 Starting rerun analysis for batch "${batchName}"...`);
       
-      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/rerun`);
+      const response = await axios.post(`${API_BASE_URL}/api/batches/${batchId}/reprocess-staging`);
 
       if (response.data.success) {
         setError(null);
@@ -1085,6 +1091,12 @@ const BatchDetails = ({
 const LlmResponseItem = ({ response, formatTimestamp, onDoubleClick }) => {
   const getStatusIcon = (status) => {
     switch (status) {
+      // Full status names
+      case 'COMPLETED': return '✅';
+      case 'FAILED': return '❌';
+      case 'PROCESSING': return '🔄';
+      case 'QUEUED': return '⏳';
+      // Legacy single-letter codes
       case 'S': return '✅';
       case 'F': return '❌';
       case 'P': return '🔄';
@@ -1095,6 +1107,12 @@ const LlmResponseItem = ({ response, formatTimestamp, onDoubleClick }) => {
 
   const getStatusText = (status) => {
     switch (status) {
+      // Full status names
+      case 'COMPLETED': return 'Completed';
+      case 'FAILED': return 'Failed';
+      case 'PROCESSING': return 'Processing';
+      case 'QUEUED': return 'Queued';
+      // Legacy single-letter codes
       case 'S': return 'Success';
       case 'F': return 'Failed';
       case 'P': return 'Processing';

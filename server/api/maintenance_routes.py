@@ -31,7 +31,8 @@ maintenance_tasks = {}
 def reset_database():
     """Reset database by clearing specified tables"""
     try:
-        data = request.get_json() or {}
+        # Force JSON parsing even without proper Content-Type header
+        data = request.get_json(force=True, silent=True) or {}
         
         # Generate task ID for tracking
         task_id = str(uuid.uuid4())
@@ -40,7 +41,7 @@ def reset_database():
         maintenance_tasks[task_id] = {
             'status': 'STARTED',
             'progress': 0,
-            'total_steps': 3,
+            'total_steps': 6,
             'current_step': 0,
             'step_name': 'Initializing...',
             'deleted_counts': {},
@@ -72,11 +73,11 @@ def reset_database():
 
                 time.sleep(0.5)  # Brief pause for UI feedback
                 
-                # Step 2: Delete Documents
+                # Step 2: Delete Documents (must be done before batches due to foreign key constraints)
                 maintenance_tasks[task_id].update({
                     'current_step': 2,
                     'step_name': 'Deleting documents...',
-                    'progress': 50
+                    'progress': 30
                 })
                 
                 # Count before deletion
@@ -88,15 +89,37 @@ def reset_database():
                 
                 maintenance_tasks[task_id]['deleted_counts']['documents'] = document_count
                 maintenance_tasks[task_id].update({
-                    'progress': 70,
+                    'progress': 40,
                     'step_name': f'Deleted {document_count} documents'
                 })
                 
                 time.sleep(0.5)  # Brief pause for UI feedback
                 
-                # Step 3: Docs (already moved to KnowledgeDocuments database)
+                # Step 3: Delete Batches
                 maintenance_tasks[task_id].update({
                     'current_step': 3,
+                    'step_name': 'Deleting batches...',
+                    'progress': 50
+                })
+                
+                # Count before deletion
+                batch_count = session.query(Batch).count()
+                
+                # Delete all batches
+                session.query(Batch).delete()
+                session.commit()
+                
+                maintenance_tasks[task_id]['deleted_counts']['batches'] = batch_count
+                maintenance_tasks[task_id].update({
+                    'progress': 70,
+                    'step_name': f'Deleted {batch_count} batches'
+                })
+                
+                time.sleep(0.5)  # Brief pause for UI feedback
+                
+                # Step 4: Docs (already moved to KnowledgeDocuments database)
+                maintenance_tasks[task_id].update({
+                    'current_step': 4,
                     'step_name': 'Docs already moved to KnowledgeDocuments database',
                     'progress': 80
                 })
@@ -109,12 +132,116 @@ def reset_database():
                 # Reset sequences (PostgreSQL specific)
                 try:
                     with engine.connect() as conn:
-                        conn.execute(text("ALTER SEQUENCE llm_responses_id_seq RESTART WITH 1"))
+                        conn.execute(text("ALTER SEQUENCE batches_id_seq RESTART WITH 1"))
                         conn.execute(text("ALTER SEQUENCE documents_id_seq RESTART WITH 1"))
-                        conn.execute(text("ALTER SEQUENCE docs_id_seq RESTART WITH 1"))
+                        # Skip llm_responses_id_seq and docs_id_seq as these tables were moved
                         conn.commit()
                 except Exception as seq_error:
                     logger.warning(f"Could not reset sequences: {seq_error}")
+                
+                # Step 4: Truncate tables in process_db
+                maintenance_tasks[task_id].update({
+                    'current_step': 4,
+                    'step_name': 'Truncating process_db tables...',
+                    'progress': 85
+                })
+                
+                try:
+                    # Create connection to process_db
+                    import psycopg2
+                    process_db_conn = psycopg2.connect(
+                        host="studio.local",
+                        database="process_db",
+                        user="postgres",
+                        password="prodogs03",
+                        port=5432
+                    )
+                    process_db_cursor = process_db_conn.cursor()
+                    
+                    # Count records before truncation
+                    process_db_cursor.execute("SELECT COUNT(*) FROM document_processing.llm_analysis_requests")
+                    requests_count = process_db_cursor.fetchone()[0]
+                    
+                    process_db_cursor.execute("SELECT COUNT(*) FROM document_processing.llm_analysis_responses")
+                    responses_count = process_db_cursor.fetchone()[0]
+                    
+                    # Truncate the tables with CASCADE to handle foreign key constraints
+                    process_db_cursor.execute("TRUNCATE TABLE document_processing.llm_analysis_requests CASCADE")
+                    process_db_cursor.execute("TRUNCATE TABLE document_processing.llm_analysis_responses CASCADE")
+                    
+                    process_db_conn.commit()
+                    process_db_cursor.close()
+                    process_db_conn.close()
+                    
+                    maintenance_tasks[task_id]['deleted_counts']['llm_analysis_requests'] = requests_count
+                    maintenance_tasks[task_id]['deleted_counts']['llm_analysis_responses'] = responses_count
+                    
+                    maintenance_tasks[task_id].update({
+                        'progress': 95,
+                        'step_name': f'Truncated {requests_count} analysis requests and {responses_count} analysis responses'
+                    })
+                    
+                    logger.info(f"Truncated process_db tables: {requests_count} requests, {responses_count} responses")
+                    
+                except Exception as process_db_error:
+                    logger.warning(f"Could not truncate process_db tables: {process_db_error}")
+                    maintenance_tasks[task_id].update({
+                        'step_name': f'Warning: Could not truncate process_db tables: {str(process_db_error)}'
+                    })
+                
+                time.sleep(0.5)  # Brief pause for UI feedback
+                
+                # Step 5: Delete records from KnowledgeDocuments database
+                maintenance_tasks[task_id].update({
+                    'current_step': 5,
+                    'step_name': 'Deleting records from KnowledgeDocuments database...',
+                    'progress': 90
+                })
+                
+                try:
+                    # Create connection to KnowledgeDocuments database
+                    import psycopg2
+                    knowledge_db_conn = psycopg2.connect(
+                        host="studio.local",
+                        database="KnowledgeDocuments",
+                        user="postgres",
+                        password="prodogs03",
+                        port=5432
+                    )
+                    knowledge_db_cursor = knowledge_db_conn.cursor()
+                    
+                    # Count records before deletion
+                    knowledge_db_cursor.execute("SELECT COUNT(*) FROM docs")
+                    docs_count = knowledge_db_cursor.fetchone()[0]
+                    
+                    knowledge_db_cursor.execute("SELECT COUNT(*) FROM llm_responses")
+                    llm_responses_count = knowledge_db_cursor.fetchone()[0]
+                    
+                    # Delete all records from both tables
+                    knowledge_db_cursor.execute("DELETE FROM llm_responses")
+                    knowledge_db_cursor.execute("DELETE FROM docs")
+                    
+                    knowledge_db_conn.commit()
+                    knowledge_db_cursor.close()
+                    knowledge_db_conn.close()
+                    
+                    maintenance_tasks[task_id]['deleted_counts']['knowledge_docs'] = docs_count
+                    maintenance_tasks[task_id]['deleted_counts']['knowledge_llm_responses'] = llm_responses_count
+                    
+                    maintenance_tasks[task_id].update({
+                        'progress': 98,
+                        'step_name': f'Deleted {docs_count} docs and {llm_responses_count} llm_responses from KnowledgeDocuments'
+                    })
+                    
+                    logger.info(f"Deleted from KnowledgeDocuments: {docs_count} docs, {llm_responses_count} llm_responses")
+                    
+                except Exception as knowledge_db_error:
+                    logger.warning(f"Could not delete from KnowledgeDocuments database: {knowledge_db_error}")
+                    maintenance_tasks[task_id].update({
+                        'step_name': f'Warning: Could not delete from KnowledgeDocuments: {str(knowledge_db_error)}'
+                    })
+                
+                time.sleep(0.5)  # Brief pause for UI feedback
                 
                 # Final update
                 maintenance_tasks[task_id].update({
@@ -238,7 +365,8 @@ def get_maintenance_stats():
 def create_snapshot():
     """Create a database snapshot"""
     try:
-        data = request.get_json() or {}
+        # Force JSON parsing even without proper Content-Type header
+        data = request.get_json(force=True, silent=True) or {}
         snapshot_name = data.get('name', f"snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         description = data.get('description', 'Database snapshot')
         snapshot_type = data.get('type', 'quick')  # 'quick' or 'full'
@@ -835,7 +963,8 @@ def delete_snapshot(snapshot_id):
 def update_snapshot(snapshot_id):
     """Update snapshot name and description"""
     try:
-        data = request.get_json() or {}
+        # Force JSON parsing even without proper Content-Type header
+        data = request.get_json(force=True, silent=True) or {}
         session = Session()
 
         # Get snapshot record
@@ -899,6 +1028,150 @@ def cleanup_old_maintenance_tasks():
     
     if tasks_to_remove:
         logger.info(f"Cleaned up {len(tasks_to_remove)} old maintenance tasks")
+
+@maintenance_bp.route('/api/maintenance/recovery/status', methods=['GET'])
+def get_recovery_status():
+    """Get the status of the last startup recovery operation"""
+    try:
+        from services.startup_recovery import get_recovery_summary
+        
+        summary = get_recovery_summary()
+        
+        return jsonify({
+            'success': True,
+            'recovery_summary': summary,
+            'message': 'Recovery status retrieved successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting recovery status: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@maintenance_bp.route('/api/maintenance/recovery/run', methods=['POST'])
+def run_recovery():
+    """Manually trigger startup recovery"""
+    try:
+        from services.startup_recovery import perform_startup_recovery
+        
+        # Generate task ID for tracking
+        task_id = str(uuid.uuid4())
+        
+        # Initialize task tracking
+        maintenance_tasks[task_id] = {
+            'status': 'STARTED',
+            'progress': 0,
+            'total_steps': 3,
+            'current_step': 0,
+            'step_name': 'Initializing recovery...',
+            'recovery_results': {},
+            'error': None,
+            'started_at': time.time()
+        }
+        
+        # Start recovery operation in background
+        def perform_recovery():
+            try:
+                # Update progress
+                maintenance_tasks[task_id].update({
+                    'current_step': 1,
+                    'step_name': 'Running startup recovery...',
+                    'progress': 30
+                })
+                
+                # Perform recovery
+                recovery_summary = perform_startup_recovery()
+                
+                # Update progress
+                maintenance_tasks[task_id].update({
+                    'current_step': 2,
+                    'step_name': 'Recovery completed',
+                    'progress': 90,
+                    'recovery_results': recovery_summary
+                })
+                
+                # Mark as completed
+                maintenance_tasks[task_id].update({
+                    'status': 'COMPLETED',
+                    'progress': 100,
+                    'current_step': 3,
+                    'step_name': 'Recovery process finished',
+                    'completed_at': time.time()
+                })
+                
+            except Exception as e:
+                logger.error(f"Error during manual recovery: {e}")
+                maintenance_tasks[task_id].update({
+                    'status': 'FAILED',
+                    'error': str(e),
+                    'completed_at': time.time()
+                })
+        
+        # Start background thread
+        recovery_thread = threading.Thread(target=perform_recovery)
+        recovery_thread.daemon = True
+        recovery_thread.start()
+        
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'message': 'Recovery process started'
+        }), 202
+        
+    except Exception as e:
+        logger.error(f"Error starting recovery: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@maintenance_bp.route('/api/maintenance/recovery/task/<task_id>', methods=['GET'])
+def get_recovery_task_status(task_id):
+    """Get the status of a recovery task"""
+    try:
+        if task_id not in maintenance_tasks:
+            return jsonify({
+                'success': False,
+                'error': 'Task not found'
+            }), 404
+            
+        task_info = maintenance_tasks[task_id]
+        
+        # Calculate elapsed time
+        elapsed_time = time.time() - task_info['started_at']
+        
+        response_data = {
+            'success': True,
+            'task_id': task_id,
+            'status': task_info['status'],
+            'progress': task_info['progress'],
+            'current_step': task_info['current_step'],
+            'total_steps': task_info['total_steps'],
+            'step_name': task_info['step_name'],
+            'recovery_results': task_info.get('recovery_results', {}),
+            'elapsed_time': round(elapsed_time, 2)
+        }
+        
+        if task_info['error']:
+            response_data['error'] = task_info['error']
+            
+        if task_info['status'] == 'COMPLETED':
+            response_data['completed_at'] = task_info.get('completed_at')
+            response_data['total_time'] = round(task_info['completed_at'] - task_info['started_at'], 2)
+            
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting recovery task status: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 
 # Register cleanup to run periodically (this would be called by a scheduler)
 def register_maintenance_routes(app):

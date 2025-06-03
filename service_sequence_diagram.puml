@@ -1,0 +1,120 @@
+@startuml BatchProcessing_Sequence
+
+title Batch Processing Workflow - Sequence Diagram
+
+actor User
+participant "Flask API" as API
+participant "BatchService" as BS
+participant "KnowledgeQueueProcessor" as KQP
+participant "RAG API" as RAG
+database "doc_eval DB" as DB
+database "KnowledgeDocuments DB" as KDB
+
+== Batch Creation and Staging ==
+
+User -> API: POST /api/batches/create
+API -> BS: create_batch(name, folders, metadata)
+BS -> DB: Create batch record
+BS -> DB: Create document records
+BS -> BS: _create_config_snapshot()
+BS -> DB: Save config snapshot
+BS --> API: {batch_id, status: "PREPARED"}
+API --> User: Batch created
+
+User -> API: POST /api/batches/{id}/stage
+API -> BS: stage_batch(batch_id)
+BS -> DB: Get batch and documents
+loop For each document
+    BS -> BS: encode_document(filepath)
+    BS -> KDB: Insert encoded document
+    BS -> KDB: Create llm_response records (QUEUED)
+end
+BS -> DB: Update batch status = "STAGED"
+BS --> API: {success: true, status: "STAGED"}
+API --> User: Batch staged for processing
+
+== Automatic Processing Loop ==
+
+note over KQP: Background process running continuously
+
+loop Every check_interval seconds
+    KQP -> KQP: monitor_batches()
+    KQP -> BS: get_batches_ready_for_processing()
+    BS -> DB: Query batches WHERE status = "STAGED"
+    BS --> KQP: List of ready batches
+    
+    alt Batches found
+        loop For each batch
+            KQP -> BS: get_next_document_for_processing(batch_id)
+            BS -> KDB: Get next QUEUED llm_response
+            BS -> DB: Get document details
+            BS --> KQP: {doc_id, encoded_content, prompt, llm_config}
+            
+            alt Document available
+                KQP -> RAG: submit_document(doc_id, prompt, llm_config)
+                RAG --> KQP: {task_id}
+                
+                KQP -> BS: update_document_task(doc_id, task_id, "PROCESSING")
+                BS -> KDB: Update llm_response with task_id
+                BS --> KQP: {success: true}
+                
+                note over KQP: Monitor task progress
+                
+                loop Until task complete
+                    KQP -> RAG: check_task_status(task_id)
+                    RAG --> KQP: {status, progress}
+                    
+                    alt Task completed
+                        KQP -> RAG: get_task_result(task_id)
+                        RAG --> KQP: {response_text, tokens, metadata}
+                        
+                        KQP -> BS: update_document_status(doc_id, "COMPLETED", response_data)
+                        BS -> KDB: Update llm_response with results
+                        BS -> BS: check_and_update_batch_completion(batch_id)
+                        
+                        alt All documents completed
+                            BS -> DB: Update batch status = "COMPLETED"
+                            BS -> DB: Update batch.completed_at
+                        end
+                        
+                        BS --> KQP: {success: true}
+                    else Task failed
+                        KQP -> BS: update_document_status(doc_id, "FAILED", error_data)
+                        BS -> KDB: Update llm_response with error
+                        BS --> KQP: {success: true}
+                    else Task timeout
+                        KQP -> BS: update_document_status(doc_id, "TIMEOUT", null)
+                        BS -> KDB: Update llm_response status
+                        BS --> KQP: {success: true}
+                    end
+                end
+            else No more documents
+                note over KQP: Move to next batch
+            end
+        end
+    end
+end
+
+== User Monitoring ==
+
+User -> API: GET /api/batches/{id}/status
+API -> BS: get_batch_status(batch_id)
+BS -> DB: Query batch and document counts
+BS -> KDB: Query llm_response statuses
+BS --> API: {status, progress, document_stats}
+API --> User: Current batch status
+
+== Batch Rerun ==
+
+User -> API: POST /api/batches/{id}/rerun
+API -> BS: rerun_batch(batch_id)
+BS -> DB: Validate batch status = "COMPLETED"
+BS -> KDB: Delete existing llm_responses
+BS -> KDB: Create new llm_response records (QUEUED)
+BS -> DB: Update batch status = "STAGED"
+BS --> API: {success: true, status: "STAGED"}
+API --> User: Batch queued for rerun
+
+note over KQP: Rerun follows same processing loop
+
+@enduml

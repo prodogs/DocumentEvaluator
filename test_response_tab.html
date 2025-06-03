@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Response Tab</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .test-info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .debug-steps {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .code {
+            background: #263238;
+            color: #aed581;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Response Tab Debugging</h1>
+        
+        <div class="test-info">
+            <h3>Expected Behavior:</h3>
+            <p>When you click on any LLM response in the Responses Explorer, a modal should open with 4 tabs:</p>
+            <ol>
+                <li>📊 Overview</li>
+                <li><strong>💬 Response</strong> (this is the one that seems to be missing)</li>
+                <li>📋 Metadata</li>
+                <li>🔧 Technical</li>
+            </ol>
+        </div>
+
+        <div class="debug-steps">
+            <h3>Debug Steps:</h3>
+            <ol>
+                <li>
+                    <strong>Clear Browser Cache Completely:</strong>
+                    <ul>
+                        <li>Open Developer Tools (F12)</li>
+                        <li>Right-click the refresh button</li>
+                        <li>Select "Empty Cache and Hard Reload"</li>
+                    </ul>
+                </li>
+                <li>
+                    <strong>Check Console for Errors:</strong>
+                    <div class="code">
+                        // In browser console, check for any errors
+                        console.clear();
+                        // Then navigate and click a response
+                    </div>
+                </li>
+                <li>
+                    <strong>Force Component Reload:</strong>
+                    <ul>
+                        <li>Try opening in an incognito/private window</li>
+                        <li>Or use a different browser temporarily</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+
+        <div class="test-info">
+            <h3>Alternative Test:</h3>
+            <p>In the browser console at http://localhost:5173, after opening a response detail modal, run:</p>
+            <div class="code">
+                // This will show all tab buttons in the modal
+                document.querySelectorAll('.tab-btn').forEach(btn => console.log(btn.textContent));
+            </div>
+            <p>You should see: "📊 Overview", "💬 Response", "📋 Metadata", "🔧 Technical"</p>
+        </div>
+
+        <div class="debug-steps">
+            <h3>If Response Tab is Still Missing:</h3>
+            <p>Please check the browser console and let me know:</p>
+            <ol>
+                <li>Are there any JavaScript errors?</li>
+                <li>What tabs do you see in the modal?</li>
+                <li>When you run the console command above, what output do you get?</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>

@@ -127,8 +127,20 @@ app.register_blueprint(model_bp)
 from api.connection_routes import connection_bp
 app.register_blueprint(connection_bp)
 
+from api.document_type_routes import document_type_bp
+app.register_blueprint(document_type_bp)
+
 from api.maintenance_routes import maintenance_bp
 app.register_blueprint(maintenance_bp)
+
+from api.monitoring_routes import register_monitoring_routes
+register_monitoring_routes(app)
+
+from api.queue_routes import register_queue_routes
+register_queue_routes(app)
+
+from api.llm_responses_routes import llm_responses_bp
+app.register_blueprint(llm_responses_bp)
 
 from routes import register_routes
 register_routes(app, background_tasks)
@@ -437,7 +449,18 @@ def initialize_services():
     try:
         from services.health_monitor import health_monitor
         from api.status_polling import polling_service
-        from services.startup_recovery import startup_recovery_service
+        from services.startup_recovery import perform_startup_recovery
+
+        # Perform startup recovery FIRST
+        logger.info("=" * 60)
+        logger.info("PERFORMING STARTUP RECOVERY")
+        logger.info("=" * 60)
+        try:
+            from services.simple_recovery import perform_simple_recovery
+            recovery_result = perform_simple_recovery()
+            logger.info(f"Startup recovery completed: {recovery_result}")
+        except Exception as e:
+            logger.error(f"Recovery failed but continuing: {e}")
 
         # Start health monitoring
         health_monitor.start_monitoring()
@@ -447,22 +470,11 @@ def initialize_services():
         polling_service.start_polling()
         logger.info("Status polling service initialized and started")
 
-        # Run startup recovery to check for outstanding tasks
-        logger.info("Running startup recovery to check for outstanding tasks...")
-        recovery_results = startup_recovery_service.run_startup_recovery()
-        logger.info(f"Startup recovery completed: {recovery_results}")
-
-        # Start the dynamic processing queue
-        logger.info("Starting dynamic processing queue...")
-        from services.dynamic_processing_queue import dynamic_queue
-        dynamic_queue.start_queue_processing()
-        logger.info("Dynamic processing queue started")
-
-        # Start batch cleanup service
-        logger.info("Starting batch cleanup service...")
-        from services.batch_cleanup_service import batch_cleanup_service
-        batch_cleanup_service.start_cleanup_service()
-        logger.info("Batch cleanup service started")
+        # Start batch queue processor
+        logger.info("Starting batch queue processor...")
+        from services.batch_queue_processor import start_queue_processor
+        start_queue_processor()
+        logger.info("Batch queue processor started")
 
     except Exception as e:
         logger.error(f"Error initializing services: {e}")

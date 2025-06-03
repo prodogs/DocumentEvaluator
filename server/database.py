@@ -1,7 +1,17 @@
 """
-Database configuration with PostgreSQL primary and SQLite fallback
+KnowledgeSync Database Configuration
 
-Updated to use PostgreSQL server at tablemini.local with SQLite fallback
+This is the main application database (referred to as "KnowledgeSync Database" throughout the app)
+that contains configuration data, batches, folders, documents, etc.
+
+Database Details:
+- Primary: PostgreSQL at studio.local:5432/doc_eval  
+- Contains: batches, folders, documents, connections, prompts, models, providers
+- Location: Can reside anywhere (currently at studio.local)
+- Purpose: Main application data and configuration
+
+Note: This is separate from the "KnowledgeDocuments Database" which handles 
+the processing queue (llm_responses and docs tables).
 """
 
 from sqlalchemy import create_engine, text
